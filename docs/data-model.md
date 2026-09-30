@@ -14,7 +14,7 @@ PostgreSQL 18. Идентификаторы — UUID, их создаёт при
 | `audio_assets` | Audio |
 | `import_jobs` | Import |
 
-FK стоят только внутри Catalog. Логическая ссылка Audio → Catalog описана отдельно и пока без FK.
+FK стоят только внутри Catalog. `audio_assets.recording_id` ссылается на Recording логически: UUID и `UNIQUE`, без FK.
 
 ## Общие правила
 
@@ -198,18 +198,9 @@ CHECK (status IN ('PENDING', 'ACQUIRING', 'PROCESSING', 'READY', 'FAILED'))
 
 ### Ссылка на Recording
 
-Логически `audio_assets.recording_id` указывает на `recordings.id`. FK нет, пока не подтверждён вариант из [architecture.md](architecture.md):
+`audio_assets.recording_id` хранит UUID Recording. FK на `recordings.id` нет. Целостность обеспечивает оркестратор Import: asset создаётся для записи, которая уже есть в каталоге. `UNIQUE (recording_id)` не даёт второй строке asset на ту же запись.
 
-```sql
-ALTER TABLE audio_assets
-    ADD CONSTRAINT audio_assets_recording_id_fkey
-    FOREIGN KEY (recording_id) REFERENCES recordings (id)
-    ON DELETE RESTRICT;
-```
-
-До этого приложение не удаляет Recording в MVP вообще, так что расхождение почти не проявляется. Ограничение всё равно лучше включить в первую миграцию audio, если решение будет принято до неё. Таблица `audio_assets` появляется в Phase 6; колонки Catalog — в Phase 2. FK можно добавить миграцией Phase 6, не переписывая Phase 2.
-
-Удаление Recording на MVP не входит в API.
+Удаление Recording на MVP не входит в API. Миграция не добавляет `audio_assets_recording_id_fkey`.
 
 ## import_jobs
 
