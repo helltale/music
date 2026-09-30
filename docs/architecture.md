@@ -1,6 +1,6 @@
 # Архитектура
 
-Статус: Phase 5 — очередь import_jobs и импорт каталога worker-ом. Audio и playback ещё не реализованы. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
+Статус: Phase 6 — audio_assets, локальный файл, FFmpeg и MinIO до статуса READY. Импорт артиста audio ещё не запускает. Playback ещё не реализован. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
 
 Связанные документы:
 
