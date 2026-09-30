@@ -41,6 +41,10 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	testPool = pool
+	if err := removeDemoCatalog(ctx); err != nil {
+		os.Stderr.WriteString("remove demo catalog: " + err.Error() + "\n")
+		os.Exit(1)
+	}
 	code := m.Run()
 	pool.Close()
 	os.Exit(code)

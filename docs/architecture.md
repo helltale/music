@@ -1,6 +1,6 @@
 # Архитектура
 
-Статус: Phase 3 — домен каталога и Identity Resolver. Provider, очередь задач и playback ещё не реализованы. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
+Статус: Phase 4 — FakeCatalogProvider и поиск артиста для админа. Очередь задач, audio и playback ещё не реализованы. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
 
 Связанные документы:
 
