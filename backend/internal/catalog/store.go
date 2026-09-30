@@ -402,6 +402,198 @@ func containsPattern(query string) (string, bool) {
 	return "%" + escaped + "%", true
 }
 
+// UpdateArtist replaces the name and description of an existing artist.
+func (s *Store) UpdateArtist(ctx context.Context, artist Artist) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE artists
+		SET name = $2, description = $3, updated_at = now()
+		WHERE id = $1
+	`, artist.ID, artist.Name, artist.Description)
+	if err != nil {
+		return fmt.Errorf("update artist: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateArtistName replaces the display name and leaves the description in place.
+func (s *Store) UpdateArtistName(ctx context.Context, id, name string) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE artists
+		SET name = $2, updated_at = now()
+		WHERE id = $1
+	`, id, name)
+	if err != nil {
+		return fmt.Errorf("update artist name: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateRelease replaces the mutable fields of an existing release.
+func (s *Store) UpdateRelease(ctx context.Context, release Release) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE releases
+		SET title = $2, release_type = $3, release_date = $4, updated_at = now()
+		WHERE id = $1
+	`, release.ID, release.Title, release.ReleaseType, dateValue(release.ReleaseDate))
+	if err != nil {
+		return fmt.Errorf("update release: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateRecording replaces the mutable fields of an existing recording.
+func (s *Store) UpdateRecording(ctx context.Context, recording Recording) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE recordings
+		SET title = $2, isrc = $3, duration_ms = $4, updated_at = now()
+		WHERE id = $1
+	`, recording.ID, recording.Title, recording.ISRC, recording.DurationMS)
+	if err != nil {
+		return fmt.Errorf("update recording: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ReplaceRecordingArtists sets the artist roles of a recording to the given list.
+func (s *Store) ReplaceRecordingArtists(ctx context.Context, recordingID string, roles []ArtistRole) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM recording_artists WHERE recording_id = $1`, recordingID); err != nil {
+		return fmt.Errorf("replace recording artists: %w", err)
+	}
+	for _, role := range roles {
+		if err := s.AddRecordingArtist(ctx, recordingID, role.ArtistID, role.Role); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReplaceReleaseArtists sets the artist roles of a release to the given list.
+func (s *Store) ReplaceReleaseArtists(ctx context.Context, releaseID string, roles []ArtistRole) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM release_artists WHERE release_id = $1`, releaseID); err != nil {
+		return fmt.Errorf("replace release artists: %w", err)
+	}
+	for _, role := range roles {
+		if err := s.AddReleaseArtist(ctx, releaseID, role.ArtistID, role.Role); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReplaceReleaseTracks sets the track list of a release to the given positions.
+func (s *Store) ReplaceReleaseTracks(ctx context.Context, releaseID string, tracks []ReleaseTrack) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM release_tracks WHERE release_id = $1`, releaseID); err != nil {
+		return fmt.Errorf("replace release tracks: %w", err)
+	}
+	for _, track := range tracks {
+		track.ReleaseID = releaseID
+		if err := s.AddReleaseTrack(ctx, track); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BindArtistExternalID inserts or refreshes the provider id of an artist.
+func (s *Store) BindArtistExternalID(ctx context.Context, row ExternalID) error {
+	return s.bindExternalID(ctx, "artist_external_ids", "artist_id", row)
+}
+
+// BindReleaseExternalID inserts or refreshes the provider id of a release.
+func (s *Store) BindReleaseExternalID(ctx context.Context, row ExternalID) error {
+	return s.bindExternalID(ctx, "release_external_ids", "release_id", row)
+}
+
+// BindRecordingExternalID inserts or refreshes the provider id of a recording.
+func (s *Store) BindRecordingExternalID(ctx context.Context, row ExternalID) error {
+	return s.bindExternalID(ctx, "recording_external_ids", "recording_id", row)
+}
+
+func (s *Store) bindExternalID(ctx context.Context, table, idColumn string, row ExternalID) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE `+table+`
+		SET external_id = $3, last_synced_at = now()
+		WHERE `+idColumn+` = $1 AND provider = $2
+	`, row.EntityID, row.Provider, row.ExternalID)
+	if err != nil {
+		return fmt.Errorf("bind external id: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO `+table+` (`+idColumn+`, provider, external_id, last_synced_at)
+		VALUES ($1, $2, $3, now())
+	`, row.EntityID, row.Provider, row.ExternalID)
+	if err != nil {
+		return fmt.Errorf("bind external id: %w", err)
+	}
+	return nil
+}
+
+// ListRecordingCandidates returns recordings that have at least one primary artist.
+// The matcher compares them in memory. The catalog is small enough for that on MVP.
+func (s *Store) ListRecordingCandidates(ctx context.Context) ([]RecordingCandidate, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT r.id, r.title, r.isrc, r.duration_ms, a.name
+		FROM recordings r
+		JOIN recording_artists ra ON ra.recording_id = r.id AND ra.role = 'primary'
+		JOIN artists a ON a.id = ra.artist_id
+		ORDER BY r.id, a.name, a.id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list recording candidates: %w", err)
+	}
+	defer rows.Close()
+	var (
+		items []RecordingCandidate
+		index = map[string]int{}
+	)
+	for rows.Next() {
+		var (
+			id, title, name string
+			isrc            *string
+			duration        *int
+		)
+		if err := rows.Scan(&id, &title, &isrc, &duration, &name); err != nil {
+			return nil, fmt.Errorf("scan recording candidate: %w", err)
+		}
+		if pos, ok := index[id]; ok {
+			items[pos].PrimaryNames = append(items[pos].PrimaryNames, name)
+			continue
+		}
+		index[id] = len(items)
+		items = append(items, RecordingCandidate{
+			ID:           id,
+			Title:        title,
+			ISRC:         isrc,
+			DurationMS:   duration,
+			PrimaryNames: []string{name},
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list recording candidates: %w", err)
+	}
+	return items, nil
+}
+
+func uniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 func dateValue(value *time.Time) any {
 	if value == nil {
 		return nil

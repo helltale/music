@@ -2,6 +2,16 @@ package catalog
 
 import "time"
 
+const (
+	RolePrimary  = "primary"
+	RoleFeatured = "featured"
+
+	ReleaseAlbum       = "album"
+	ReleaseSingle      = "single"
+	ReleaseEP          = "ep"
+	ReleaseCompilation = "compilation"
+)
+
 // Artist is a catalog row. ID is created by the caller.
 type Artist struct {
 	ID             string
