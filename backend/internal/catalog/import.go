@@ -84,12 +84,27 @@ type recordingDraft struct {
 	Artists    []Credit
 }
 
+// ImportProgress is how far a catalog import has committed.
+type ImportProgress struct {
+	ArtistID           string
+	ReleasesTotal      int
+	ReleasesDone       int
+	RecordingsTotal    int
+	RecordingsImported int
+}
+
 // Importer writes a catalog snapshot in short transactions.
 // Order is fixed: the artist, then each recording, then each release.
 type Importer struct {
 	begin interface {
 		Begin(context.Context) (pgx.Tx, error)
 	}
+	notify func(context.Context, ImportProgress) error
+}
+
+// Notify reports committed progress. The callback runs outside the catalog transaction.
+func (im *Importer) Notify(fn func(context.Context, ImportProgress) error) {
+	im.notify = fn
 }
 
 // NewImporter uses a PostgreSQL pool.
@@ -121,6 +136,14 @@ func (im *Importer) ImportArtist(ctx context.Context, in ArtistImport) (ImportRe
 		RecordingIDs: map[string]string{},
 		ReleaseIDs:   map[string]string{},
 	}
+	progress := ImportProgress{
+		ArtistID:        artistID,
+		ReleasesTotal:   len(cleaned.Releases),
+		RecordingsTotal: len(recordings),
+	}
+	if err := im.emit(ctx, progress); err != nil {
+		return ImportResult{}, err
+	}
 	for _, recording := range recordings {
 		var written recordingWrite
 		if err := im.withTx(ctx, func(store *Store) error {
@@ -131,6 +154,10 @@ func (im *Importer) ImportArtist(ctx context.Context, in ArtistImport) (ImportRe
 			return ImportResult{}, err
 		}
 		result.RecordingIDs[recording.ExternalID] = written.ID
+		progress.RecordingsImported++
+		if err := im.emit(ctx, progress); err != nil {
+			return ImportResult{}, err
+		}
 		if len(written.AmbiguousIDs) > 0 {
 			isrc := ""
 			if recording.ISRC != nil {
@@ -153,8 +180,19 @@ func (im *Importer) ImportArtist(ctx context.Context, in ArtistImport) (ImportRe
 			return ImportResult{}, err
 		}
 		result.ReleaseIDs[release.ExternalID] = releaseID
+		progress.ReleasesDone++
+		if err := im.emit(ctx, progress); err != nil {
+			return ImportResult{}, err
+		}
 	}
 	return result, nil
+}
+
+func (im *Importer) emit(ctx context.Context, progress ImportProgress) error {
+	if im.notify == nil {
+		return nil
+	}
+	return im.notify(ctx, progress)
 }
 
 func (im *Importer) withTx(ctx context.Context, fn func(*Store) error) error {

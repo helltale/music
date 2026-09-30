@@ -11,6 +11,7 @@ import (
 
 	"github.com/helltale/music/backend/internal/catalog"
 	"github.com/helltale/music/backend/internal/catalog/provider"
+	"github.com/helltale/music/backend/internal/importjob"
 	"github.com/helltale/music/backend/internal/platform"
 )
 
@@ -42,7 +43,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", platform.Health)
 	mux.HandleFunc("GET /ready", ready.ServeHTTP)
+	catalogs := map[string]importjob.CatalogSource{
+		provider.ProviderFake: provider.NewFake(),
+	}
 	catalog.Mount(mux, provider.NewFake())
+	importjob.Mount(mux, importjob.NewStore(db), catalogs)
 	mux.HandleFunc("/", platform.NotFound)
 
 	srv := platform.NewServer(cfg.HTTPAddr, platform.Middleware(log, mux))

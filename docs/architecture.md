@@ -1,6 +1,6 @@
 # Архитектура
 
-Статус: Phase 4 — FakeCatalogProvider и поиск артиста для админа. Очередь задач, audio и playback ещё не реализованы. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
+Статус: Phase 5 — очередь import_jobs и импорт каталога worker-ом. Audio и playback ещё не реализованы. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
 
 Связанные документы:
 
