@@ -1,0 +1,146 @@
+name: music
+
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL:-postgres://music:music@postgres:5432/music?sslmode=disable}
+  HTTP_ADDR: ${HTTP_ADDR:-:8080}
+  WORKER_HEALTH_ADDR: ${WORKER_HEALTH_ADDR:-:8081}
+  WORKER_INSTANCE_ID: ${WORKER_INSTANCE_ID:-}
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+  S3_BUCKET: ${S3_BUCKET:-music}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-music}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-musicsecret}
+  S3_USE_SSL: ${S3_USE_SSL:-false}
+  S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
+  AUDIO_TEMP_DIR: ${AUDIO_TEMP_DIR:-/tmp/music-audio}
+  AUDIO_MAX_BYTES: ${AUDIO_MAX_BYTES:-209715200}
+  AUDIO_PROCESS_TIMEOUT: ${AUDIO_PROCESS_TIMEOUT:-10m}
+  PLAYBACK_URL_TTL: ${PLAYBACK_URL_TTL:-1h}
+  LOCAL_AUDIO_DIR: ${LOCAL_AUDIO_DIR:-/app/testdata/audio}
+  LEASE_TIMEOUT: ${LEASE_TIMEOUT:-2m}
+  LEASE_HEARTBEAT: ${LEASE_HEARTBEAT:-30s}
+  SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-25s}
+  MIGRATIONS_DIR: /app/migrations
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-music}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-music}
+      POSTGRES_DB: ${POSTGRES_DB:-music}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  minio:
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-music}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-musicsecret}
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:3000
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  minio-init:
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-music}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-musicsecret}
+    volumes:
+      - ./minio-init.sh:/minio-init.sh:ro
+    entrypoint: ["/bin/bash", "/minio-init.sh"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+  migrate:
+    image: music-api:dev
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile.api
+    entrypoint: ["/app/migrate"]
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  music-api:
+    image: music-api:dev
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile.api
+    environment:
+      <<: *app-env
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app/api", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  music-worker:
+    image: music-worker:dev
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile.worker
+    environment:
+      <<: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app/worker", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  music-web:
+    image: music-web:dev
+    build:
+      context: ../..
+      dockerfile: frontend/Dockerfile
+    environment:
+      API_UPSTREAM: ${API_UPSTREAM:-http://music-api:8080}
+    ports:
+      - "3000:3000"
+    depends_on:
+      music-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data:

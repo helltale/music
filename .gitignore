@@ -1,0 +1,7 @@
+.env
+frontend/node_modules
+frontend/.next
+frontend/out
+*.exe
+/bin/
+.DS_Store

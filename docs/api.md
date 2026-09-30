@@ -30,6 +30,7 @@
 | HTTP | code | Когда |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | Неверный UUID, пустой `q`, неизвестное поле, слишком большой `limit` |
+| 404 | `NOT_FOUND` | Нет такого пути |
 | 404 | `ARTIST_NOT_FOUND` | Нет артиста |
 | 404 | `RELEASE_NOT_FOUND` | Нет релиза |
 | 404 | `RECORDING_NOT_FOUND` | Нет записи |

@@ -1,0 +1,26 @@
+FROM golang:1.27.1-bookworm AS build
+
+WORKDIR /src
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid 10001 --home-dir /home/app --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app /tmp/music-audio \
+    && chown app:app /tmp/music-audio
+
+COPY --from=build --chown=app:app /out/worker /app/worker
+COPY --chown=app:app backend/testdata/audio/ /app/testdata/audio/
+
+USER app
+ENV LOCAL_AUDIO_DIR=/app/testdata/audio \
+    AUDIO_TEMP_DIR=/tmp/music-audio
+EXPOSE 8081
+ENTRYPOINT ["/app/worker"]

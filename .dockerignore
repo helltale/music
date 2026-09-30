@@ -1,0 +1,11 @@
+.git
+**/.git
+.env
+**/.env
+**/*_test.go
+**/node_modules
+frontend/.next
+frontend/out
+**/*.md
+.cursor
+agent-transcripts

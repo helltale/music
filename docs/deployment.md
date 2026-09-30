@@ -13,8 +13,8 @@
 | `music-worker` | `music-worker:dev` | Очередь и audio |
 | `music-web` | `music-web:dev` | UI и proxy `/api/v1` |
 | `postgres` | `postgres:18`, не `latest` | БД |
-| `minio` | закреплённый тег MinIO, не `latest` | Object Storage |
-| `minio-init` | `minio/mc`, закреплённый тег | Создать бакет и CORS, затем выйти |
+| `minio` | `bitnamilegacy/minio:2025.7.23-debian-12-r5` | Object Storage |
+| `minio-init` | тот же образ, клиент `mc` | Создать бакет и CORS, затем выйти |
 
 Сеть одна, DNS-имена равны именам сервисов. Внутри сети API и worker ходят в `postgres:5432` и `minio:9000`.
 
@@ -35,8 +35,8 @@
 
 Тома только у состояния инфраструктуры:
 
-- `postgres_data`
-- `minio_data`
+- `postgres_data` смонтирован в `/var/lib/postgresql`. У официального образа PostgreSQL 18 данные лежат в `/var/lib/postgresql/18/docker`, а объявленный volume — родительский каталог. Монтирование старого пути `/var/lib/postgresql/data` на этом образе не сохраняет кластер.
+- `minio_data` смонтирован в `/bitnami/minio/data`. Так этот образ Bitnami хранит данные.
 
 У API, worker и web постоянных томов нет. Демо-audio для локального provider копируется в образ worker (короткие fixture-файлы), а не монтируется с хоста, чтобы `docker compose up -d` не зависел от раскладки исходников на машине. Тесты в образ не копируются.
 
@@ -80,6 +80,9 @@ Multi-stage сборка.
 | Переменная | Назначение |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL. Локально `postgres://music:music@postgres:5432/music?sslmode=disable` |
+| `POSTGRES_USER` | Пользователь образа Postgres. Локально `music` |
+| `POSTGRES_PASSWORD` | Пароль образа Postgres. Локально `music` |
+| `POSTGRES_DB` | Имя базы. Локально `music` |
 | `HTTP_ADDR` | Адрес API, `:8080` |
 | `WORKER_HEALTH_ADDR` | Адрес проб worker, `:8081` |
 | `WORKER_INSTANCE_ID` | Необязательный UUID. Пусто — сгенерировать при старте |
@@ -108,17 +111,15 @@ Multi-stage сборка.
 
 ## MinIO
 
-`minio-init`:
+Официальные образы `minio/minio` и `minio/mc` сняты с Docker Hub, тот же релиз на `quay.io` отвечает 401, а `dl.min.io` отдаёт 410. Локальный стек использует закреплённый образ `bitnamilegacy/minio:2025.7.23-debian-12-r5`. Это тот же MinIO, с клиентом `mc` внутри. Команда сервера остаётся на entrypoint образа: он сам поднимает API на 9000 и консоль на 9001.
 
-- создаёт бакет `music`, если его нет;
-- не включает публичное чтение бакета;
-- ставит CORS: методы `GET` и `HEAD`, заголовок `Range`, ответные заголовки `Content-Length`, `Content-Range`, `Accept-Ranges`, `Content-Type`. Origin — адрес web, локально `http://localhost:3000`.
+`minio-init` создаёт бакет `music`, если его нет, и не включает публичное чтение. CORS этой версии MinIO задаётся переменной `MINIO_API_CORS_ALLOW_ORIGIN` на самом сервере: origin локального web — `http://localhost:3000`. Методы чтения — `GET` и `HEAD`.
 
 Объекты пишутся с `Content-Type: audio/mp4` для playable. Чтение только по подписи.
 
 ## Миграции
 
-`cmd/migrate` применяет SQL из `backend/migrations` и выходит с 0. Повторный запуск не меняет уже применённую версию.
+`cmd/migrate` применяет `*.up.sql` из `backend/migrations` по имени файла и выходит с 0. Служебная таблица `schema_migrations` хранит уже применённые версии. Повторный запуск их не исполняет снова. На Phase 1 доменных миграций нет: команда создаёт только `schema_migrations`.
 
 Несколько API не мигрируют схему при старте. В Compose это отдельный завершившийся сервис. В Kubernetes позже это Job перед выкладкой новых Pod или шаг CI/CD. Образ тот же `music-api`, команда другая.
 
