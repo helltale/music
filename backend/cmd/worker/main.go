@@ -68,7 +68,8 @@ func main() {
 		Store: importjob.NewStore(db),
 		DB:    db,
 		Catalogs: map[string]importjob.CatalogSource{
-			provider.ProviderFake: provider.NewFake(),
+			provider.ProviderFake:        provider.NewFake(),
+			provider.ProviderMusicBrainz: provider.NewMusicBrainz(cfg.MusicBrainzBaseURL, cfg.MusicBrainzUserAgent),
 		},
 		Audio: &audio.Processor{
 			DB:       db,

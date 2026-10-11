@@ -45,8 +45,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", platform.Health)
 	mux.HandleFunc("GET /ready", ready.ServeHTTP)
+	fake := provider.NewFake()
+	brainz := provider.NewMusicBrainz(cfg.MusicBrainzBaseURL, cfg.MusicBrainzUserAgent)
 	catalogs := map[string]importjob.CatalogSource{
-		provider.ProviderFake: provider.NewFake(),
+		provider.ProviderFake:        fake,
+		provider.ProviderMusicBrainz: brainz,
 	}
 	objects, err := audio.NewS3Store(audio.S3Config{
 		Endpoint:       cfg.S3Endpoint,
@@ -61,7 +64,7 @@ func main() {
 		log.Error("object storage", "error", err.Error())
 		os.Exit(1)
 	}
-	catalog.Mount(mux, catalog.NewStore(db), provider.NewFake(), audio.NewStore(db))
+	catalog.Mount(mux, catalog.NewStore(db), provider.SearchList{fake, brainz}, audio.NewStore(db))
 	importjob.Mount(mux, importjob.NewStore(db), catalogs)
 	streaming.Mount(mux, &streaming.Service{
 		Recordings: catalog.NewStore(db),

@@ -84,7 +84,9 @@ export default function AdminPage() {
       <ul>
         {candidates?.items.map((candidate) => (
           <li key={`${candidate.provider}:${candidate.external_id}`}>
-            <span>{candidate.name}</span>
+            <span>
+              {candidate.name} · {candidate.provider}
+            </span>
             <button type="button" disabled={busy} onClick={() => void onImport(candidate)}>
               Импорт
             </button>

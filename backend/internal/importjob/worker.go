@@ -305,6 +305,9 @@ func snapshot(ctx context.Context, source CatalogSource, providerName, externalI
 	releases := make([]catalog.ReleaseImport, 0, len(summaries))
 	for _, summary := range summaries {
 		details, err := source.GetReleaseDetails(ctx, summary.ExternalID)
+		if errors.Is(err, provider.ErrUnusable) {
+			continue
+		}
 		if err != nil {
 			return catalog.ArtistImport{}, err
 		}
@@ -353,7 +356,7 @@ var (
 )
 
 func permanent(err error) bool {
-	if errors.Is(err, provider.ErrNotFound) || errors.Is(err, errUnknownProvider) {
+	if errors.Is(err, provider.ErrNotFound) || errors.Is(err, provider.ErrPermanent) || errors.Is(err, errUnknownProvider) {
 		return true
 	}
 	var invalid *catalog.InvalidInputError
@@ -366,6 +369,8 @@ func jobMessage(err error) string {
 		return "Artist not found"
 	case errors.Is(err, errUnknownProvider):
 		return "Unknown provider"
+	case errors.Is(err, provider.ErrPermanent):
+		return "Provider request was rejected"
 	default:
 		var invalid *catalog.InvalidInputError
 		if errors.As(err, &invalid) {

@@ -54,7 +54,7 @@ FK стоят только внутри Catalog. `audio_assets.recording_id` с�
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
 | `updated_at` | `timestamptz` | NOT NULL |
 
-`release_date` — полный день либо NULL. Год без месяца и дня не кодируется как 1 января. Точность появится вместе с первым реальным provider, если она понадобится.
+`release_date` — полный день либо NULL. Год без месяца и дня не кодируется как 1 января. MusicBrainz отдаёт неполные даты, но колонка из-за этого не менялась: неполный день хранится как NULL.
 
 Список релизов артиста идёт через `release_artists`, сортировка `release_date DESC NULLS LAST, title ASC`.
 

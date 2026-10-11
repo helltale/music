@@ -99,6 +99,8 @@ Multi-stage сборка.
 | `AUDIO_PROCESS_TIMEOUT` | `10m` |
 | `PLAYBACK_URL_TTL` | `1h` |
 | `LOCAL_AUDIO_DIR` | Путь fixture внутри worker |
+| `MUSICBRAINZ_BASE_URL` | Корень web service. Пусто или значение по умолчанию — `https://musicbrainz.org/ws/2` |
+| `MUSICBRAINZ_USER_AGENT` | Обязательный для MusicBrainz идентификатор приложения. По умолчанию `music/1.0 ( https://github.com/helltale/music )` |
 | `API_UPSTREAM` | Для web: `http://music-api:8080` |
 | `LEASE_TIMEOUT` | `2m` |
 | `LEASE_HEARTBEAT` | `30s` |

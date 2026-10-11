@@ -33,27 +33,29 @@ var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 // Config is process configuration loaded from the environment.
 // Secret values are not printed by String.
 type Config struct {
-	DatabaseURL         string
-	HTTPAddr            string
-	WorkerHealthAddr    string
-	WorkerInstanceID    string
-	S3Endpoint          string
-	S3PublicEndpoint    string
-	S3Bucket            string
-	S3Region            string
-	S3AccessKey         string
-	S3SecretKey         string
-	S3UseSSL            bool
-	S3UsePathStyle      bool
-	AudioTempDir        string
-	AudioMaxBytes       int64
-	AudioProcessTimeout time.Duration
-	PlaybackURLTTL      time.Duration
-	LocalAudioDir       string
-	LeaseTimeout        time.Duration
-	LeaseHeartbeat      time.Duration
-	MigrationsDir       string
-	ShutdownTimeout     time.Duration
+	DatabaseURL          string
+	HTTPAddr             string
+	WorkerHealthAddr     string
+	WorkerInstanceID     string
+	S3Endpoint           string
+	S3PublicEndpoint     string
+	S3Bucket             string
+	S3Region             string
+	S3AccessKey          string
+	S3SecretKey          string
+	S3UseSSL             bool
+	S3UsePathStyle       bool
+	AudioTempDir         string
+	AudioMaxBytes        int64
+	AudioProcessTimeout  time.Duration
+	PlaybackURLTTL       time.Duration
+	LocalAudioDir        string
+	MusicBrainzBaseURL   string
+	MusicBrainzUserAgent string
+	LeaseTimeout         time.Duration
+	LeaseHeartbeat       time.Duration
+	MigrationsDir        string
+	ShutdownTimeout      time.Duration
 }
 
 // Load reads configuration from the environment.
@@ -77,6 +79,8 @@ func Load() (Config, error) {
 	cfg.S3SecretKey = os.Getenv("S3_SECRET_KEY")
 	cfg.AudioTempDir = envString("AUDIO_TEMP_DIR", defaultAudioTempDir)
 	cfg.LocalAudioDir = envString("LOCAL_AUDIO_DIR", defaultLocalAudioDir)
+	cfg.MusicBrainzBaseURL = envString("MUSICBRAINZ_BASE_URL", "")
+	cfg.MusicBrainzUserAgent = envString("MUSICBRAINZ_USER_AGENT", "")
 	cfg.MigrationsDir = envString("MIGRATIONS_DIR", defaultMigrationsDir)
 
 	if cfg.S3UseSSL, err = envBool("S3_USE_SSL", false); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -126,6 +127,96 @@ func TestWorkerFailsUnknownArtist(t *testing.T) {
 	}
 	cancel()
 	waitDone(t, done)
+}
+
+func TestWorkerFailsPermanentProviderError(t *testing.T) {
+	pushOtherJobs(t)
+	store := NewStore(testPool)
+	enqueued, err := store.Enqueue(context.Background(), "rejected", newID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := startWorker(t, ctx, map[string]CatalogSource{
+		"rejected": errCatalog{err: fmt.Errorf("musicbrainz status 400: %w", provider.ErrPermanent)},
+	})
+	waitStatus(t, enqueued.Job.ID, StatusFailed)
+	job, err := store.Get(context.Background(), enqueued.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Attempt != 1 || job.LastError == nil || *job.LastError != "Provider request was rejected" {
+		t.Fatalf("job = %+v", job)
+	}
+	cancel()
+	waitDone(t, done)
+}
+
+func TestWorkerSkipsUnusableRelease(t *testing.T) {
+	ctx := context.Background()
+	removeExternalCatalog(t, "mixed", "mixed-artist", []string{"mixed-album"}, []string{"mixed-track"})
+	t.Cleanup(func() {
+		removeExternalCatalog(t, "mixed", "mixed-artist", []string{"mixed-album"}, []string{"mixed-track"})
+	})
+	pushOtherJobs(t)
+	store := NewStore(testPool)
+	enqueued, err := store.Enqueue(ctx, "mixed", "mixed-artist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := startWorker(t, runCtx, map[string]CatalogSource{"mixed": mixedCatalog{}})
+	waitStatus(t, enqueued.Job.ID, StatusCompleted)
+	job, err := store.Get(ctx, enqueued.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var progress map[string]any
+	if err := json.Unmarshal(job.Progress, &progress); err != nil {
+		t.Fatal(err)
+	}
+	if progress["releases_total"] != float64(1) || progress["recordings_imported"] != float64(1) || progress["audio_ready"] != float64(1) {
+		t.Fatalf("progress %s", job.Progress)
+	}
+	cancel()
+	waitDone(t, done)
+}
+
+type mixedCatalog struct{}
+
+func (mixedCatalog) GetArtist(context.Context, string) (provider.Artist, error) {
+	return provider.Artist{ExternalID: "mixed-artist", Name: "Mixed Artist"}, nil
+}
+
+func (mixedCatalog) GetArtistReleases(context.Context, string) ([]provider.ReleaseSummary, error) {
+	return []provider.ReleaseSummary{
+		{ExternalID: "mixed-album", Title: "Mixed Album", ReleaseType: "album"},
+		{ExternalID: "mixed-bad", Title: "Bad", ReleaseType: "album"},
+	}, nil
+}
+
+func (mixedCatalog) GetReleaseDetails(_ context.Context, externalID string) (provider.Release, error) {
+	if externalID == "mixed-bad" {
+		return provider.Release{}, provider.ErrUnusable
+	}
+	ms := 1000
+	credit := provider.Credit{ExternalID: "mixed-artist", Name: "Mixed Artist", Role: "primary"}
+	return provider.Release{
+		ExternalID:  "mixed-album",
+		Title:       "Mixed Album",
+		ReleaseType: "album",
+		Artists:     []provider.Credit{credit},
+		Tracks: []provider.Track{{
+			ExternalID:  "mixed-track",
+			Title:       "Mixed Track",
+			DurationMS:  &ms,
+			DiscNumber:  1,
+			TrackNumber: 1,
+			Artists:     []provider.Credit{credit},
+		}},
+	}, nil
 }
 
 func TestWorkerPartialAudioKeepsCatalog(t *testing.T) {
@@ -403,6 +494,58 @@ func countRows(t *testing.T, query string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+func removeExternalCatalog(t *testing.T, providerName, artistExternal string, releaseExternals, recordingExternals []string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `DELETE FROM import_jobs WHERE provider = $1 AND subject_external_id = $2`, providerName, artistExternal); err != nil {
+		t.Fatal(err)
+	}
+	releaseIDs := externalEntityIDs(t, `SELECT release_id::text FROM release_external_ids WHERE provider = $1 AND external_id = ANY($2)`, providerName, releaseExternals)
+	recordingIDs := externalEntityIDs(t, `SELECT recording_id::text FROM recording_external_ids WHERE provider = $1 AND external_id = ANY($2)`, providerName, recordingExternals)
+	artistIDs := externalEntityIDs(t, `SELECT artist_id::text FROM artist_external_ids WHERE provider = $1 AND external_id = $2`, providerName, artistExternal)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`DELETE FROM audio_assets WHERE recording_id::text = ANY($1)`, []any{recordingIDs}},
+		{`DELETE FROM release_tracks WHERE release_id::text = ANY($1) OR recording_id::text = ANY($2)`, []any{releaseIDs, recordingIDs}},
+		{`DELETE FROM release_artists WHERE release_id::text = ANY($1)`, []any{releaseIDs}},
+		{`DELETE FROM recording_artists WHERE recording_id::text = ANY($1)`, []any{recordingIDs}},
+		{`DELETE FROM release_external_ids WHERE release_id::text = ANY($1)`, []any{releaseIDs}},
+		{`DELETE FROM recording_external_ids WHERE recording_id::text = ANY($1)`, []any{recordingIDs}},
+		{`DELETE FROM artist_external_ids WHERE artist_id::text = ANY($1)`, []any{artistIDs}},
+		{`DELETE FROM releases WHERE id::text = ANY($1)`, []any{releaseIDs}},
+		{`DELETE FROM recordings WHERE id::text = ANY($1)`, []any{recordingIDs}},
+		{`DELETE FROM artists WHERE id::text = ANY($1)`, []any{artistIDs}},
+	}
+	for _, statement := range statements {
+		if _, err := testPool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func externalEntityIDs(t *testing.T, query string, args ...any) []string {
+	t.Helper()
+	rows, err := testPool.Query(context.Background(), query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return ids
 }
 
 func removeDemoCatalog(ctx context.Context) error {
