@@ -21,6 +21,9 @@ var (
 	ErrSourceNotFound = errors.New("audio source not found")
 	// ErrSuperseded means a newer attempt owns the asset.
 	ErrSuperseded = errors.New("audio attempt superseded")
+	// ErrLeaseLost means the caller hook rejected the READY transaction.
+	// The asset row is left unpublished.
+	ErrLeaseLost = errors.New("audio publish lease lost")
 )
 
 // Asset is one playable file for a recording.

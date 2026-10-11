@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// ProviderLocal is the source_provider stored for files read from disk.
+const ProviderLocal = "local"
+
 // Provider opens the original audio for one recording.
 type Provider interface {
 	Open(ctx context.Context, recordingExternalID string) (source io.ReadCloser, reference string, err error)

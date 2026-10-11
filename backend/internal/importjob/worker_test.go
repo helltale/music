@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/helltale/music/backend/internal/audio"
 	"github.com/helltale/music/backend/internal/catalog/provider"
 )
 
@@ -42,8 +45,8 @@ func TestWorkerImportsFakeCatalog(t *testing.T) {
 	if progress["releases_total"] != float64(2) || progress["releases_done"] != float64(2) || progress["recordings_total"] != float64(3) || progress["recordings_imported"] != float64(3) {
 		t.Fatalf("progress %s", finished.Progress)
 	}
-	if _, ok := progress["audio_ready"]; ok {
-		t.Fatalf("audio progress is present: %s", finished.Progress)
+	if progress["audio_ready"] != float64(3) || progress["audio_failed"] != float64(0) {
+		t.Fatalf("audio progress %s", finished.Progress)
 	}
 	if countRows(t, `SELECT count(*) FROM recordings WHERE isrc = 'USTST2600001'`) != 1 {
 		t.Fatal("track one was duplicated")
@@ -125,6 +128,99 @@ func TestWorkerFailsUnknownArtist(t *testing.T) {
 	waitDone(t, done)
 }
 
+func TestWorkerPartialAudioKeepsCatalog(t *testing.T) {
+	ctx := context.Background()
+	if err := removeDemoCatalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := removeDemoCatalog(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	pushOtherJobs(t)
+	store := NewStore(testPool)
+	enqueued, err := store.Enqueue(ctx, provider.ProviderFake, "test-artist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := startWorkerWithAudio(t, runCtx, map[string]CatalogSource{provider.ProviderFake: provider.NewFake()}, &scriptedAudio{
+		errs: map[string]error{
+			"track-three": &audio.ProcessError{Message: "Audio source not found", Permanent: true},
+		},
+	})
+	waitStatus(t, enqueued.Job.ID, StatusPartiallyCompleted)
+	job, err := store.Get(ctx, enqueued.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.LastError != nil {
+		t.Fatalf("last_error = %s", *job.LastError)
+	}
+	var progress map[string]any
+	if err := json.Unmarshal(job.Progress, &progress); err != nil {
+		t.Fatal(err)
+	}
+	if progress["recordings_imported"] != float64(3) || progress["audio_ready"] != float64(2) || progress["audio_failed"] != float64(1) {
+		t.Fatalf("progress %s", job.Progress)
+	}
+	if countRows(t, `SELECT count(*) FROM artists a JOIN artist_external_ids e ON e.artist_id = a.id WHERE e.provider = 'fake' AND e.external_id = 'test-artist'`) != 1 {
+		t.Fatal("catalog artist is missing")
+	}
+	if countRows(t, `SELECT count(*) FROM recordings r JOIN recording_external_ids e ON e.recording_id = r.id WHERE e.provider = 'fake' AND e.external_id IN ('track-one', 'track-two', 'track-three')`) != 3 {
+		t.Fatal("catalog recordings were removed")
+	}
+	cancel()
+	waitDone(t, done)
+}
+
+func TestWorkerRequeuesTemporaryAudio(t *testing.T) {
+	ctx := context.Background()
+	if err := removeDemoCatalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := removeDemoCatalog(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	pushOtherJobs(t)
+	store := NewStore(testPool)
+	enqueued, err := store.Enqueue(ctx, provider.ProviderFake, "test-artist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := startWorkerWithAudio(t, runCtx, map[string]CatalogSource{provider.ProviderFake: provider.NewFake()}, &scriptedAudio{
+		errs: map[string]error{
+			"track-two": &audio.ProcessError{Message: "Audio processing timed out", Permanent: false},
+		},
+	})
+	waitRequeued(t, enqueued.Job.ID)
+	job, err := store.Get(ctx, enqueued.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.LastError == nil || *job.LastError != "Temporary failure" {
+		t.Fatalf("job = %+v", job)
+	}
+	var progress map[string]any
+	if err := json.Unmarshal(job.Progress, &progress); err != nil {
+		t.Fatal(err)
+	}
+	if progress["recordings_imported"] != float64(3) || progress["audio_ready"] != float64(2) || progress["audio_failed"] != float64(0) {
+		t.Fatalf("progress %s", job.Progress)
+	}
+	if countRows(t, `SELECT count(*) FROM artists a JOIN artist_external_ids e ON e.artist_id = a.id WHERE e.provider = 'fake' AND e.external_id = 'test-artist'`) != 1 {
+		t.Fatal("catalog artist is missing")
+	}
+	cancel()
+	waitDone(t, done)
+}
+
 func TestWorkerRequeuesTemporaryFailure(t *testing.T) {
 	pushOtherJobs(t)
 	store := NewStore(testPool)
@@ -187,10 +283,16 @@ func (e errCatalog) GetReleaseDetails(context.Context, string) (provider.Release
 
 func startWorker(t *testing.T, ctx context.Context, catalogs map[string]CatalogSource) <-chan struct{} {
 	t.Helper()
+	return startWorkerWithAudio(t, ctx, catalogs, &scriptedAudio{})
+}
+
+func startWorkerWithAudio(t *testing.T, ctx context.Context, catalogs map[string]CatalogSource, pipeline recordingAudio) <-chan struct{} {
+	t.Helper()
 	worker := &Worker{
 		Store:     NewStore(testPool),
 		DB:        testPool,
 		Catalogs:  catalogs,
+		Audio:     pipeline,
 		WorkerID:  newID(t),
 		Lease:     time.Minute,
 		Heartbeat: time.Hour,
@@ -208,7 +310,12 @@ func startWorker(t *testing.T, ctx context.Context, catalogs map[string]CatalogS
 
 func waitStatus(t *testing.T, id, status string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	waitStatusFor(t, id, status, 10*time.Second)
+}
+
+func waitStatusFor(t *testing.T, id, status string, limit time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(limit)
 	for time.Now().Before(deadline) {
 		job, err := NewStore(testPool).Get(context.Background(), id)
 		if err != nil {
@@ -217,8 +324,8 @@ func waitStatus(t *testing.T, id, status string) {
 		if job.Status == status {
 			return
 		}
-		if job.Status == StatusFailed && status != StatusFailed {
-			t.Fatalf("job failed: %v", job.LastError)
+		if job.Status == StatusFailed || job.Status == StatusCompleted || job.Status == StatusPartiallyCompleted {
+			t.Fatalf("job reached %s, last_error=%v progress=%s", job.Status, job.LastError, job.Progress)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -242,6 +349,35 @@ func waitRequeued(t *testing.T, id string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("job %s was not requeued", id)
+}
+
+type scriptedAudio struct {
+	errs map[string]error
+	hook func(context.Context, pgx.Tx) error
+}
+
+func (s *scriptedAudio) SetAfterPublish(fn func(context.Context, pgx.Tx) error) {
+	s.hook = fn
+}
+
+func (s *scriptedAudio) Process(ctx context.Context, recordingID, _, externalID, _ string) (audio.Asset, error) {
+	if err := s.errs[externalID]; err != nil {
+		return audio.Asset{}, err
+	}
+	if s.hook != nil {
+		tx, err := testPool.Begin(ctx)
+		if err != nil {
+			return audio.Asset{}, err
+		}
+		defer tx.Rollback(ctx)
+		if err := s.hook(ctx, tx); err != nil {
+			return audio.Asset{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return audio.Asset{}, err
+		}
+	}
+	return audio.Asset{Status: audio.StatusReady, RecordingID: recordingID}, nil
 }
 
 func waitDone(t *testing.T, done <-chan struct{}) {
@@ -289,6 +425,7 @@ func removeDemoCatalog(ctx context.Context) error {
 		query string
 		args  []any
 	}{
+		{`DELETE FROM audio_assets WHERE recording_id::text = ANY($1)`, []any{recordingIDs}},
 		{`DELETE FROM release_tracks WHERE release_id::text = ANY($1) OR recording_id::text = ANY($2)`, []any{releaseIDs, recordingIDs}},
 		{`DELETE FROM release_artists WHERE release_id::text = ANY($1)`, []any{releaseIDs}},
 		{`DELETE FROM recording_artists WHERE recording_id::text = ANY($1)`, []any{recordingIDs}},

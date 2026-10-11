@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/helltale/music/backend/internal/audio"
 	"github.com/helltale/music/backend/internal/catalog"
 	"github.com/helltale/music/backend/internal/catalog/provider"
 )
@@ -20,14 +22,21 @@ type CatalogSource interface {
 	GetReleaseDetails(ctx context.Context, externalID string) (provider.Release, error)
 }
 
-// Worker claims jobs and imports their catalog.
-// Audio is a later phase: a finished catalog with no audio requirement is COMPLETED.
+// recordingAudio turns one imported recording into a playable asset.
+// SetAfterPublish attaches the job progress update to the READY transaction.
+type recordingAudio interface {
+	Process(ctx context.Context, recordingID, sourceProvider, externalID, workID string) (audio.Asset, error)
+	SetAfterPublish(func(context.Context, pgx.Tx) error)
+}
+
+// Worker claims jobs, imports their catalog, and processes audio for each recording.
 type Worker struct {
 	Store *Store
 	DB    interface {
 		Begin(context.Context) (pgx.Tx, error)
 	}
 	Catalogs  map[string]CatalogSource
+	Audio     recordingAudio
 	WorkerID  string
 	Lease     time.Duration
 	Heartbeat time.Duration
@@ -86,17 +95,21 @@ func (w *Worker) process(ctx context.Context, job Job) {
 		w.log().Warn("lease lost", "job_id", job.ID)
 		return
 	}
-	if err == nil {
-		if finishErr := w.Store.Finish(ctx, job.ID, w.WorkerID, job.Attempt, StatusCompleted, "", job.Progress); finishErr != nil {
-			if !errors.Is(finishErr, ErrLeaseLost) {
-				w.log().Error("complete job", "job_id", job.ID, "error", finishErr.Error())
-			}
+	if jobCtx.Err() != nil {
+		if releaseErr := w.Store.Release(context.WithoutCancel(ctx), job.ID, w.WorkerID, job.Attempt); releaseErr != nil {
+			w.log().Error("release job", "job_id", job.ID, "error", releaseErr.Error())
 		}
 		return
 	}
-	if ctx.Err() != nil {
-		if releaseErr := w.Store.Release(context.WithoutCancel(ctx), job.ID, w.WorkerID, job.Attempt); releaseErr != nil {
-			w.log().Error("release job", "job_id", job.ID, "error", releaseErr.Error())
+	if err == nil || errors.Is(err, errPartialAudio) {
+		status := StatusCompleted
+		if err != nil {
+			status = StatusPartiallyCompleted
+		}
+		if finishErr := w.Store.Finish(ctx, job.ID, w.WorkerID, job.Attempt, status, "", job.Progress); finishErr != nil {
+			if !errors.Is(finishErr, ErrLeaseLost) {
+				w.log().Error("complete job", "job_id", job.ID, "error", finishErr.Error())
+			}
 		}
 		return
 	}
@@ -148,15 +161,17 @@ func (w *Worker) importCatalog(ctx context.Context, job Job) (json.RawMessage, e
 		return nil, err
 	}
 	var latest json.RawMessage
+	doc := progressDocument{}
 	importer := catalog.NewImporter(w.DB)
 	importer.Notify(func(ctx context.Context, progress catalog.ImportProgress) error {
-		raw, err := json.Marshal(progressDocument{
+		doc = progressDocument{
 			ArtistID:           progress.ArtistID,
 			ReleasesTotal:      progress.ReleasesTotal,
 			ReleasesDone:       progress.ReleasesDone,
 			RecordingsTotal:    progress.RecordingsTotal,
 			RecordingsImported: progress.RecordingsImported,
-		})
+		}
+		raw, err := json.Marshal(doc)
 		if err != nil {
 			return err
 		}
@@ -170,7 +185,102 @@ func (w *Worker) importCatalog(ctx context.Context, job Job) (json.RawMessage, e
 	for _, row := range result.Ambiguous {
 		w.log().Warn("ambiguous isrc", "job_id", job.ID, "external_id", row.ExternalID, "isrc", row.ISRC, "recording_ids", row.RecordingIDs)
 	}
-	return latest, nil
+	if len(result.RecordingIDs) == 0 {
+		return latest, nil
+	}
+	return w.processAudio(ctx, job, result, doc)
+}
+
+func (w *Worker) processAudio(ctx context.Context, job Job, result catalog.ImportResult, doc progressDocument) (json.RawMessage, error) {
+	if w.Audio == nil {
+		return marshalProgress(doc), errors.New("audio processor is not configured")
+	}
+	audioReady := 0
+	audioFailed := 0
+	doc.AudioReady = &audioReady
+	doc.AudioFailed = &audioFailed
+	if err := w.persistProgress(ctx, job, doc); err != nil {
+		return marshalProgress(doc), err
+	}
+
+	externalIDs := make([]string, 0, len(result.RecordingIDs))
+	for externalID := range result.RecordingIDs {
+		externalIDs = append(externalIDs, externalID)
+	}
+	sort.Strings(externalIDs)
+
+	for _, externalID := range externalIDs {
+		if ctx.Err() != nil {
+			return marshalProgress(doc), ctx.Err()
+		}
+		published := false
+		w.Audio.SetAfterPublish(func(ctx context.Context, tx pgx.Tx) error {
+			audioReady++
+			if err := NewStore(tx).SaveProgress(ctx, job.ID, w.WorkerID, job.Attempt, mustProgress(doc)); err != nil {
+				audioReady--
+				if errors.Is(err, ErrLeaseLost) {
+					return audio.ErrLeaseLost
+				}
+				return err
+			}
+			published = true
+			return nil
+		})
+		_, err := w.Audio.Process(ctx, result.RecordingIDs[externalID], audio.ProviderLocal, externalID, job.ID)
+		if ctx.Err() != nil {
+			return marshalProgress(doc), ctx.Err()
+		}
+		if errors.Is(err, audio.ErrLeaseLost) || errors.Is(err, ErrLeaseLost) {
+			return marshalProgress(doc), ErrLeaseLost
+		}
+		var fileErr *audio.ProcessError
+		if errors.As(err, &fileErr) && fileErr.Permanent {
+			audioFailed++
+			w.log().Warn("recording audio failed", "job_id", job.ID, "external_id", externalID, "error", fileErr.Message)
+			if saveErr := w.persistProgress(ctx, job, doc); saveErr != nil {
+				return marshalProgress(doc), saveErr
+			}
+			continue
+		}
+		if err != nil {
+			return marshalProgress(doc), err
+		}
+		if !published {
+			audioReady++
+			if saveErr := w.persistProgress(ctx, job, doc); saveErr != nil {
+				return marshalProgress(doc), saveErr
+			}
+		}
+	}
+	raw := marshalProgress(doc)
+	if audioFailed > 0 {
+		return raw, errPartialAudio
+	}
+	return raw, nil
+}
+
+func (w *Worker) persistProgress(ctx context.Context, job Job, doc progressDocument) error {
+	err := w.Store.SaveProgress(ctx, job.ID, w.WorkerID, job.Attempt, mustProgress(doc))
+	if errors.Is(err, ErrLeaseLost) {
+		return ErrLeaseLost
+	}
+	return err
+}
+
+func marshalProgress(doc progressDocument) json.RawMessage {
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func mustProgress(doc progressDocument) []byte {
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return []byte("{}")
+	}
+	return raw
 }
 
 type progressDocument struct {
@@ -179,6 +289,8 @@ type progressDocument struct {
 	ReleasesDone       int    `json:"releases_done"`
 	RecordingsTotal    int    `json:"recordings_total"`
 	RecordingsImported int    `json:"recordings_imported"`
+	AudioReady         *int   `json:"audio_ready,omitempty"`
+	AudioFailed        *int   `json:"audio_failed,omitempty"`
 }
 
 func snapshot(ctx context.Context, source CatalogSource, providerName, externalID string) (catalog.ArtistImport, error) {
@@ -235,7 +347,10 @@ func toCredits(credits []provider.Credit) []catalog.Credit {
 	return out
 }
 
-var errUnknownProvider = errors.New("unknown provider")
+var (
+	errUnknownProvider = errors.New("unknown provider")
+	errPartialAudio    = errors.New("partial audio")
+)
 
 func permanent(err error) bool {
 	if errors.Is(err, provider.ErrNotFound) || errors.Is(err, errUnknownProvider) {

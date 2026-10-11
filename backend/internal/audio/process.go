@@ -17,7 +17,6 @@ import (
 )
 
 // Processor turns one recording's original audio into a playable object.
-// Import jobs call it later. This phase does not update import_jobs.
 type Processor struct {
 	DB       *pgxpool.Pool
 	Objects  ObjectStorage
@@ -26,8 +25,14 @@ type Processor struct {
 	MaxBytes int64
 	Timeout  time.Duration
 	// AfterPublish runs inside the READY transaction, after the asset row matches
-	// this generation. Phase 7 uses it for the job progress update. Nil skips it.
+	// this generation. The import worker uses it to store job progress.
+	// Nil skips it. SetAfterPublish replaces it for the next Process call.
 	AfterPublish func(ctx context.Context, tx pgx.Tx) error
+}
+
+// SetAfterPublish installs the hook that commits together with READY.
+func (p *Processor) SetAfterPublish(fn func(context.Context, pgx.Tx) error) {
+	p.AfterPublish = fn
 }
 
 // Process reads the provider file, stores original and playable audio, and marks the asset READY.
@@ -57,7 +62,7 @@ func (p *Processor) Process(ctx context.Context, recordingID, sourceProvider, ex
 	defer cancel()
 	ready, err := p.encodeAndStore(procCtx, store, recordingID, generation, work)
 	if err != nil {
-		if errors.Is(err, ErrSuperseded) {
+		if errors.Is(err, ErrSuperseded) || errors.Is(err, ErrLeaseLost) {
 			return Asset{}, err
 		}
 		message, permanent := classify(ctx, procCtx, err)

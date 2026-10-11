@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/helltale/music/backend/internal/audio"
 	"github.com/helltale/music/backend/internal/catalog/provider"
 	"github.com/helltale/music/backend/internal/importjob"
 	"github.com/helltale/music/backend/internal/platform"
@@ -51,11 +52,31 @@ func main() {
 	mux.HandleFunc("/", platform.NotFound)
 	srv := platform.NewServer(cfg.WorkerHealthAddr, platform.Middleware(log, mux))
 
+	objects, err := audio.NewS3Store(audio.S3Config{
+		Endpoint:     cfg.S3Endpoint,
+		Region:       cfg.S3Region,
+		Bucket:       cfg.S3Bucket,
+		AccessKey:    cfg.S3AccessKey,
+		SecretKey:    cfg.S3SecretKey,
+		UsePathStyle: cfg.S3UsePathStyle,
+	})
+	if err != nil {
+		log.Error("object storage", "error", err.Error())
+		os.Exit(1)
+	}
 	worker := &importjob.Worker{
 		Store: importjob.NewStore(db),
 		DB:    db,
 		Catalogs: map[string]importjob.CatalogSource{
 			provider.ProviderFake: provider.NewFake(),
+		},
+		Audio: &audio.Processor{
+			DB:       db,
+			Objects:  objects,
+			Source:   audio.LocalProvider{Dir: cfg.LocalAudioDir},
+			TempDir:  cfg.AudioTempDir,
+			MaxBytes: cfg.AudioMaxBytes,
+			Timeout:  cfg.AudioProcessTimeout,
 		},
 		WorkerID:  cfg.WorkerInstanceID,
 		Lease:     cfg.LeaseTimeout,
