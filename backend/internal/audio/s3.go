@@ -12,13 +12,16 @@ import (
 )
 
 // S3Config points an S3 client at MinIO or another S3-compatible store.
+// Endpoint is used for Put and Delete. PublicEndpoint is the host written into
+// presigned GET URLs. An empty public endpoint uses Endpoint.
 type S3Config struct {
-	Endpoint     string
-	Region       string
-	Bucket       string
-	AccessKey    string
-	SecretKey    string
-	UsePathStyle bool
+	Endpoint       string
+	PublicEndpoint string
+	Region         string
+	Bucket         string
+	AccessKey      string
+	SecretKey      string
+	UsePathStyle   bool
 }
 
 // S3Store implements ObjectStorage with the AWS S3 API.
@@ -28,23 +31,41 @@ type S3Store struct {
 	presign *s3.PresignClient
 }
 
-// NewS3Store builds a path-style client. Endpoint is the internal address used for Put.
+// NewS3Store builds a path-style client. Put uses Endpoint. Presign uses PublicEndpoint.
 func NewS3Store(cfg S3Config) (*S3Store, error) {
+	client, err := newClient(cfg, cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	presignEndpoint := cfg.Endpoint
+	if cfg.PublicEndpoint != "" {
+		presignEndpoint = cfg.PublicEndpoint
+	}
+	presignClient := client
+	if presignEndpoint != cfg.Endpoint {
+		presignClient, err = newClient(cfg, presignEndpoint)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &S3Store{
+		bucket:  cfg.Bucket,
+		client:  client,
+		presign: s3.NewPresignClient(presignClient),
+	}, nil
+}
+
+func newClient(cfg S3Config, endpoint string) (*s3.Client, error) {
 	region := cfg.Region
 	if region == "" {
 		region = "us-east-1"
 	}
-	client := s3.New(s3.Options{
+	return s3.New(s3.Options{
 		Region:       region,
-		BaseEndpoint: aws.String(cfg.Endpoint),
+		BaseEndpoint: aws.String(endpoint),
 		UsePathStyle: cfg.UsePathStyle,
 		Credentials:  credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
-	})
-	return &S3Store{
-		bucket:  cfg.Bucket,
-		client:  client,
-		presign: s3.NewPresignClient(client),
-	}, nil
+	}), nil
 }
 
 // Put writes one object. size is the exact body length.

@@ -9,10 +9,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/helltale/music/backend/internal/audio"
 	"github.com/helltale/music/backend/internal/catalog"
 	"github.com/helltale/music/backend/internal/catalog/provider"
 	"github.com/helltale/music/backend/internal/importjob"
 	"github.com/helltale/music/backend/internal/platform"
+	"github.com/helltale/music/backend/internal/streaming"
 )
 
 func main() {
@@ -46,8 +48,27 @@ func main() {
 	catalogs := map[string]importjob.CatalogSource{
 		provider.ProviderFake: provider.NewFake(),
 	}
+	objects, err := audio.NewS3Store(audio.S3Config{
+		Endpoint:       cfg.S3Endpoint,
+		PublicEndpoint: cfg.S3PublicEndpoint,
+		Region:         cfg.S3Region,
+		Bucket:         cfg.S3Bucket,
+		AccessKey:      cfg.S3AccessKey,
+		SecretKey:      cfg.S3SecretKey,
+		UsePathStyle:   cfg.S3UsePathStyle,
+	})
+	if err != nil {
+		log.Error("object storage", "error", err.Error())
+		os.Exit(1)
+	}
 	catalog.Mount(mux, provider.NewFake())
 	importjob.Mount(mux, importjob.NewStore(db), catalogs)
+	streaming.Mount(mux, &streaming.Service{
+		Recordings: catalog.NewStore(db),
+		Assets:     audio.NewStore(db),
+		Objects:    objects,
+		TTL:        cfg.PlaybackURLTTL,
+	})
 	mux.HandleFunc("/", platform.NotFound)
 
 	srv := platform.NewServer(cfg.HTTPAddr, platform.Middleware(log, mux))
