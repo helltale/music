@@ -61,7 +61,7 @@ func main() {
 		log.Error("object storage", "error", err.Error())
 		os.Exit(1)
 	}
-	catalog.Mount(mux, provider.NewFake())
+	catalog.Mount(mux, catalog.NewStore(db), provider.NewFake(), audio.NewStore(db))
 	importjob.Mount(mux, importjob.NewStore(db), catalogs)
 	streaming.Mount(mux, &streaming.Service{
 		Recordings: catalog.NewStore(db),

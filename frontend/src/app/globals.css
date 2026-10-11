@@ -1,5 +1,60 @@
 body {
   font-family: sans-serif;
-  margin: 2rem;
-  line-height: 1.4;
+  margin: 0;
+  line-height: 1.45;
+  color: #1c1c1c;
+  background: #f7f7f5;
+}
+
+header {
+  display: flex;
+  gap: 1rem;
+  padding: 0.8rem 1.5rem;
+  background: #fff;
+  border-bottom: 1px solid #ddd;
+}
+
+main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+form,
+li,
+section {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+li,
+section,
+form {
+  margin: 0.6rem 0;
+}
+
+input,
+button {
+  font: inherit;
+  padding: 0.35rem 0.6rem;
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+.error {
+  color: #8d1d1d;
+}
+
+audio {
+  width: min(100%, 28rem);
 }

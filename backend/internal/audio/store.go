@@ -13,6 +13,7 @@ import (
 
 type db interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
@@ -32,6 +33,37 @@ const assetColumns = `
 	sample_rate, channels, duration_ms, size_bytes, checksum, status, last_error,
 	created_at, updated_at
 `
+
+// PlayableRecordings reports which of the given recordings have a READY playable file.
+func (s *Store) PlayableRecordings(ctx context.Context, recordingIDs []string) (map[string]bool, error) {
+	ready := map[string]bool{}
+	if len(recordingIDs) == 0 {
+		return ready, nil
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT recording_id::text
+		FROM audio_assets
+		WHERE recording_id::text = ANY($1)
+		  AND status = 'READY'
+		  AND playable_object_key IS NOT NULL
+		  AND char_length(playable_object_key) > 0
+	`, recordingIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list playable recordings: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan playable recording: %w", err)
+		}
+		ready[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list playable recordings: %w", err)
+	}
+	return ready, nil
+}
 
 // GetByRecording loads the asset for one recording.
 func (s *Store) GetByRecording(ctx context.Context, recordingID string) (Asset, error) {

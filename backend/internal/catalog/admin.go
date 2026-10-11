@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -16,8 +17,19 @@ const (
 	maxPageLimit     = 100
 )
 
-// Mount registers the catalog HTTP routes implemented so far.
-func Mount(mux *http.ServeMux, searcher provider.ArtistSearcher) {
+// Playable reports which recordings can be played. The catalog package does not import audio.
+type Playable interface {
+	PlayableRecordings(ctx context.Context, recordingIDs []string) (map[string]bool, error)
+}
+
+// Mount registers the public catalog routes and the admin artist search.
+func Mount(mux *http.ServeMux, store *Store, searcher provider.ArtistSearcher, playable Playable) {
+	public := publicHandler{store: store, playable: playable}
+	mux.HandleFunc("GET /api/v1/artists", public.listArtists)
+	mux.HandleFunc("GET /api/v1/artists/{id}", public.getArtist)
+	mux.HandleFunc("GET /api/v1/artists/{id}/releases", public.listArtistReleases)
+	mux.HandleFunc("GET /api/v1/releases/{id}", public.getRelease)
+	mux.HandleFunc("GET /api/v1/recordings/{id}", public.getRecording)
 	mux.HandleFunc("GET /api/v1/admin/catalog/artists/search", adminArtistSearch(searcher))
 }
 

@@ -15,7 +15,7 @@ import (
 
 func TestAdminArtistSearch(t *testing.T) {
 	mux := http.NewServeMux()
-	Mount(mux, provider.NewFake())
+	Mount(mux, nil, provider.NewFake(), nil)
 	mux.HandleFunc("/", platform.NotFound)
 	handler := platform.Middleware(platform.NewLogger(), mux)
 
