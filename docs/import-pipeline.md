@@ -48,9 +48,9 @@ Audio:
 
 - `Open(ctx, recordingExternalID) (source io.ReadCloser, reference string, error)`
 
-`LocalAudioProvider` открывает `{LOCAL_AUDIO_DIR}/{externalID}.wav`.
+`LocalAudioProvider` открывает `{LOCAL_AUDIO_DIR}/{externalID}.wav`. Если файла нет, а external id записи — MBID, `FreeDownload` спрашивает MusicBrainz о связях URL. Берётся только тип `download for free` (`45d0cbc5-d65b-4e77-bdfd-8a75207cb5c5`): страница, где эту запись можно легально скачать бесплатно. Потоковая страница, покупка и хосты стриминговых сервисов не используются. Прямой https-адрес файла скачивается как есть. Ссылка на предмет Internet Archive разбирается через его metadata API, затем скачивается один аудиофайл этого предмета. Лимит тот же: не больше одного запроса в секунду к MusicBrainz, `User-Agent` из `MUSICBRAINZ_USER_AGENT`. Нет такой ссылки — запись `FAILED`, job может закончиться `PARTIALLY_COMPLETED`. Сбой сети временный и возвращает job в очередь.
 
-Бизнес-логика зависит от этих интерфейсов. Реализации каталога — `FakeCatalogProvider` и `MusicBrainz`. Аудио на этом шаге по-прежнему `LocalAudioProvider`. Ошибок вида «контент защищён, обойди ограничение» в интерфейсе нет.
+Бизнес-логика зависит от этих интерфейсов. Реализации каталога — `FakeCatalogProvider` и `MusicBrainz`. Аудио — локальный файл, затем бесплатная загрузка. Ошибок вида «контент защищён, обойди ограничение» в интерфейсе нет.
 
 Фейковый каталог описан в [data-model.md](data-model.md). Он и локальное аудио работают в процессе, без сети. MusicBrainz — сетевой адаптер только для метаданных.
 
@@ -143,7 +143,7 @@ Audio одной Recording:
 
 Ошибка конкретного файла не валит каталог и не валит остальные записи:
 
-- нет файла у LocalAudioProvider;
+- нет файла у LocalAudioProvider и нет легальной бесплатной ссылки;
 - validation не прошла;
 - ffprobe не видит аудио;
 - FFmpeg вернул ошибку декодирования.

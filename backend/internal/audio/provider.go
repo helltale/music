@@ -8,8 +8,12 @@ import (
 	"strings"
 )
 
-// ProviderLocal is the source_provider stored for files read from disk.
-const ProviderLocal = "local"
+const (
+	// ProviderLocal is the source_provider stored for files read from disk.
+	ProviderLocal = "local"
+	// ProviderFreeDownload is the source_provider stored for a legal free download.
+	ProviderFreeDownload = "free-download"
+)
 
 // Provider opens the original audio for one recording.
 type Provider interface {

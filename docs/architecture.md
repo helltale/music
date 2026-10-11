@@ -1,6 +1,6 @@
 # Архитектура
 
-Статус: Phase 10 — первый реальный CatalogProvider: MusicBrainz. Аудио по-прежнему только LocalAudioProvider. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
+Статус: Phase 11 — легальное аудио по ссылке MusicBrainz «download for free», рядом с локальными файлами. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
 
 Связанные документы:
 
@@ -373,7 +373,7 @@ Worker:
 - аутентификацию и авторизацию;
 - сбор сиротских объектов;
 - CI/CD pipeline;
-- реальный AudioProvider;
+- поиск аудио вне ссылки MusicBrainz «download for free»;
 - загрузку обложек и фото артистов. Колонки `image_object_key` и `cover_object_key` есть и остаются пустыми;
 - точность неполной даты релиза (`year` / `month`). MusicBrainz отдаёт год или год-месяц, но в `release_date` пишется только полный день, иначе NULL.
 

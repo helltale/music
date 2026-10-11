@@ -45,6 +45,7 @@ func (p *Processor) Process(ctx context.Context, recordingID, sourceProvider, ex
 		return p.failEarly(ctx, store, recordingID, sourceProvider, err)
 	}
 	defer os.RemoveAll(work.dir)
+	sourceProvider = p.resolvedProvider(sourceProvider)
 
 	asset, err := store.Ensure(ctx, recordingID, sourceProvider, work.reference)
 	if err != nil {
@@ -213,6 +214,7 @@ func (p *Processor) publish(ctx context.Context, asset Asset) error {
 }
 
 func (p *Processor) failEarly(ctx context.Context, store *Store, recordingID, sourceProvider string, cause error) (Asset, error) {
+	sourceProvider = p.resolvedProvider(sourceProvider)
 	message, permanent := classify(ctx, nil, cause)
 	if _, err := store.Ensure(ctx, recordingID, sourceProvider, ""); err != nil {
 		return Asset{}, err
@@ -242,10 +244,33 @@ func objectKeys(recordingID string, generation int, ext string) (string, string)
 }
 
 func contentType(ext string) string {
-	if strings.EqualFold(ext, ".wav") {
+	switch strings.ToLower(ext) {
+	case ".wav":
 		return "audio/wav"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".flac":
+		return "audio/flac"
+	case ".ogg", ".opus":
+		return "audio/ogg"
+	case ".m4a", ".aac":
+		return "audio/mp4"
+	case ".aif", ".aiff":
+		return "audio/aiff"
+	default:
+		return "application/octet-stream"
 	}
-	return "application/octet-stream"
+}
+
+func (p *Processor) resolvedProvider(fallback string) string {
+	named, ok := p.Source.(interface{ LastProvider() string })
+	if !ok {
+		return fallback
+	}
+	if name := strings.TrimSpace(named.LastProvider()); name != "" {
+		return name
+	}
+	return fallback
 }
 
 func (p *Processor) timeout() time.Duration {

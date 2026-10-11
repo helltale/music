@@ -163,7 +163,7 @@ PK `(recording_id, artist_id, role)`.
 | `id` | `uuid` | PK |
 | `recording_id` | `uuid` | NOT NULL, `UNIQUE` |
 | `source_provider` | `text` | NOT NULL, длина > 0 |
-| `source_reference` | `text` | NULL. Для local — имя файла |
+| `source_reference` | `text` | NULL. Для `local` — имя файла, для `free-download` — URL файла |
 | `generation` | `integer` | NOT NULL, default 0, `CHECK (generation >= 0)` |
 | `original_object_key` | `text` | NULL |
 | `playable_object_key` | `text` | NULL |

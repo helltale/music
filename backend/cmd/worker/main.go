@@ -72,9 +72,14 @@ func main() {
 			provider.ProviderMusicBrainz: provider.NewMusicBrainz(cfg.MusicBrainzBaseURL, cfg.MusicBrainzUserAgent),
 		},
 		Audio: &audio.Processor{
-			DB:       db,
-			Objects:  objects,
-			Source:   audio.LocalProvider{Dir: cfg.LocalAudioDir},
+			DB:      db,
+			Objects: objects,
+			Source: &audio.Fallback{
+				Primary:       audio.LocalProvider{Dir: cfg.LocalAudioDir},
+				PrimaryName:   audio.ProviderLocal,
+				Secondary:     audio.NewFreeDownload(cfg.MusicBrainzBaseURL, cfg.MusicBrainzUserAgent),
+				SecondaryName: audio.ProviderFreeDownload,
+			},
 			TempDir:  cfg.AudioTempDir,
 			MaxBytes: cfg.AudioMaxBytes,
 			Timeout:  cfg.AudioProcessTimeout,
