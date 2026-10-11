@@ -35,6 +35,11 @@ func (p *Processor) SetAfterPublish(fn func(context.Context, pgx.Tx) error) {
 	p.AfterPublish = fn
 }
 
+// Playable reports which recordings already have a READY playable file.
+func (p *Processor) Playable(ctx context.Context, recordingIDs []string) (map[string]bool, error) {
+	return NewStore(p.DB).PlayableRecordings(ctx, recordingIDs)
+}
+
 // Process reads the provider file, stores original and playable audio, and marks the asset READY.
 // workID is the temp directory segment ({TempDir}/{workID}/{recordingID}/).
 // The same checksum on an existing READY asset does not upload again.

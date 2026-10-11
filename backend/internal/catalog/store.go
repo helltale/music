@@ -14,6 +14,9 @@ import (
 // ErrNotFound means the requested catalog row does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrNotSyncable means the artist does not have exactly one provider id.
+var ErrNotSyncable = errors.New("not syncable")
+
 type db interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -58,6 +61,38 @@ func (s *Store) GetArtist(ctx context.Context, id string) (Artist, error) {
 		return Artist{}, fmt.Errorf("get artist: %w", err)
 	}
 	return artist, nil
+}
+
+// SyncSubject returns the single provider id that can refresh this artist.
+func (s *Store) SyncSubject(ctx context.Context, artistID string) (string, string, error) {
+	if _, err := s.GetArtist(ctx, artistID); err != nil {
+		return "", "", err
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT provider, external_id
+		FROM artist_external_ids
+		WHERE artist_id = $1
+		ORDER BY provider, external_id
+	`, artistID)
+	if err != nil {
+		return "", "", fmt.Errorf("list artist external ids: %w", err)
+	}
+	defer rows.Close()
+	var providerName, externalID string
+	count := 0
+	for rows.Next() {
+		count++
+		if err := rows.Scan(&providerName, &externalID); err != nil {
+			return "", "", fmt.Errorf("scan artist external id: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", fmt.Errorf("list artist external ids: %w", err)
+	}
+	if count != 1 {
+		return "", "", ErrNotSyncable
+	}
+	return providerName, externalID, nil
 }
 
 // ListArtists returns artists ordered by name.

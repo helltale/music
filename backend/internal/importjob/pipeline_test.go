@@ -73,6 +73,96 @@ func TestArtistImportStoresPlayableAudio(t *testing.T) {
 	waitDone(t, done)
 }
 
+func TestArtistSyncRefreshesCatalogAndSkipsReadyAudio(t *testing.T) {
+	requireFFmpeg(t)
+	ctx := context.Background()
+	if err := removeDemoCatalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	objects := openBucket(t)
+	t.Cleanup(func() {
+		if err := removeDemoCatalog(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Cleanup(func() { deleteDemoObjects(t, objects) })
+
+	pushOtherJobs(t)
+	store := NewStore(testPool)
+	enqueued, err := store.Enqueue(ctx, provider.ProviderFake, "test-artist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := startWorkerWithAudio(t, runCtx, map[string]CatalogSource{provider.ProviderFake: provider.NewFake()}, newPipeline(t, objects, fixtureAudioDir()))
+	waitStatusFor(t, enqueued.Job.ID, StatusCompleted, time.Minute)
+
+	var artistID string
+	if err := testPool.QueryRow(ctx, `SELECT artist_id::text FROM artist_external_ids WHERE provider = 'fake' AND external_id = 'test-artist'`).Scan(&artistID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE artists SET name = 'Renamed Artist' WHERE id = $1`, artistID); err != nil {
+		t.Fatal(err)
+	}
+	var releaseID string
+	if err := testPool.QueryRow(ctx, `SELECT release_id::text FROM release_external_ids WHERE provider = 'fake' AND external_id = 'first-album'`).Scan(&releaseID); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{
+		`DELETE FROM release_tracks WHERE release_id = $1`,
+		`DELETE FROM release_artists WHERE release_id = $1`,
+		`DELETE FROM release_external_ids WHERE release_id = $1`,
+		`DELETE FROM releases WHERE id = $1`,
+	} {
+		if _, err := testPool.Exec(ctx, query, releaseID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE audio_assets
+		SET status = 'FAILED', playable_object_key = NULL, last_error = 'Audio source not found'
+		WHERE recording_id = (
+			SELECT recording_id FROM recording_external_ids WHERE provider = 'fake' AND external_id = 'track-three'
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	synced, err := store.EnqueueSync(ctx, provider.ProviderFake, "test-artist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !synced.Created {
+		t.Fatal("sync did not create a job")
+	}
+	waitStatusFor(t, synced.Job.ID, StatusCompleted, time.Minute)
+	assertAudioProgress(t, synced.Job.ID, 3, 0)
+	assertAssets(t, map[string]assetExpect{
+		"track-one":   {status: audio.StatusReady, generation: 1},
+		"track-two":   {status: audio.StatusReady, generation: 1},
+		"track-three": {status: audio.StatusReady, generation: 2},
+	})
+	var name string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM artists WHERE id = $1`, artistID).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Test Artist" {
+		t.Fatalf("name = %s", name)
+	}
+	if countRows(t, `SELECT count(*) FROM artist_external_ids WHERE provider = 'fake' AND external_id = 'test-artist'`) != 1 {
+		t.Fatal("artist was duplicated")
+	}
+	if countRows(t, `SELECT count(*) FROM recordings r JOIN recording_external_ids e ON e.recording_id = r.id WHERE e.provider = 'fake' AND e.external_id IN ('track-one', 'track-two', 'track-three')`) != 3 {
+		t.Fatal("recordings were duplicated")
+	}
+	if countRows(t, `SELECT count(*) FROM release_external_ids WHERE provider = 'fake' AND external_id = 'first-album'`) != 1 {
+		t.Fatal("release was not restored once")
+	}
+	cancel()
+	waitDone(t, done)
+}
+
 func TestArtistImportKeepsCatalogWhenAudioFileIsMissing(t *testing.T) {
 	requireFFmpeg(t)
 	ctx := context.Background()

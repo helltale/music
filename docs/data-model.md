@@ -255,7 +255,7 @@ CREATE INDEX import_jobs_running_lease_idx
     WHERE status = 'RUNNING';
 ```
 
-`payload` на MVP пустой объект или мелкие параметры. Вход job — `provider` + `subject_external_id`.
+`payload` на обычном импорте — `{}`. Ручная синхронизация пишет `{"sync":true}`: тот же тип `artist_import`, но worker запрашивает аудио только у записей без `READY` playable. Вход job — `provider` + `subject_external_id`. `payload` наружу не отдаётся.
 
 `progress` — выход worker, не вход:
 

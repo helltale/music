@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 const freeRecordingID = "11111111-1111-1111-1111-111111111111"
@@ -194,6 +195,28 @@ func TestFreeDownloadBecomesPlayable(t *testing.T) {
 	}
 	if asset.Codec == nil || *asset.Codec != "aac" || asset.PlayableObjectKey == nil {
 		t.Fatalf("playable = %+v", asset)
+	}
+}
+
+func TestFreeDownloadLiveHeader(t *testing.T) {
+	if os.Getenv("MUSICBRAINZ_LIVE") == "" {
+		t.Skip("set MUSICBRAINZ_LIVE=1 to download a legal free recording")
+	}
+	source := NewFreeDownload("", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	body, reference, err := source.Open(ctx, "8ac3fb86-b2d9-4959-a289-90dc86de5fa1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+	prefix := make([]byte, 3)
+	if _, err := io.ReadFull(body, prefix); err != nil {
+		t.Fatal(err)
+	}
+	mp3 := string(prefix) == "ID3" || (prefix[0] == 0xff && prefix[1]&0xe0 == 0xe0)
+	if !mp3 || !strings.Contains(reference, "archive.org/") || !strings.HasSuffix(strings.Split(reference, "?")[0], ".mp3") {
+		t.Fatalf("prefix=%q reference=%s", prefix, reference)
 	}
 }
 

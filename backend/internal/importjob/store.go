@@ -29,7 +29,7 @@ func NewStore(db db) *Store {
 }
 
 const jobColumns = `
-	id, type, status, provider, subject_external_id, progress,
+	id, type, status, provider, subject_external_id, payload, progress,
 	attempt, max_attempts, next_attempt_at, locked_at, locked_by, last_error,
 	created_at, started_at, finished_at
 `
@@ -40,7 +40,20 @@ func (s *Store) Enqueue(ctx context.Context, provider, externalID string) (Enque
 	if err != nil {
 		return EnqueueResult{}, err
 	}
-	job, err := s.insert(ctx, id, provider, externalID)
+	return s.enqueue(ctx, id, provider, externalID, `{}`)
+}
+
+// EnqueueSync inserts a QUEUED artist import that refreshes the catalog and acquires audio only where it is missing.
+func (s *Store) EnqueueSync(ctx context.Context, provider, externalID string) (EnqueueResult, error) {
+	id, err := platform.NewUUID()
+	if err != nil {
+		return EnqueueResult{}, err
+	}
+	return s.enqueue(ctx, id, provider, externalID, `{"sync":true}`)
+}
+
+func (s *Store) enqueue(ctx context.Context, id, provider, externalID, payload string) (EnqueueResult, error) {
+	job, err := s.insert(ctx, id, provider, externalID, payload)
 	if err == nil {
 		return EnqueueResult{Job: job, Created: true}, nil
 	}
@@ -57,11 +70,11 @@ func (s *Store) Enqueue(ctx context.Context, provider, externalID string) (Enque
 	return EnqueueResult{Job: existing, Created: false}, nil
 }
 
-func (s *Store) insert(ctx context.Context, id, provider, externalID string) (Job, error) {
+func (s *Store) insert(ctx context.Context, id, provider, externalID, payload string) (Job, error) {
 	row := s.db.QueryRow(ctx, `
-		INSERT INTO import_jobs (id, type, status, provider, subject_external_id)
-		VALUES ($1, $2, 'QUEUED', $3, $4)
-		RETURNING `+jobColumns, id, TypeArtistImport, provider, externalID)
+		INSERT INTO import_jobs (id, type, status, provider, subject_external_id, payload)
+		VALUES ($1, $2, 'QUEUED', $3, $4, $5::jsonb)
+		RETURNING `+jobColumns, id, TypeArtistImport, provider, externalID, payload)
 	job, err := scanJob(row)
 	if err != nil {
 		return Job{}, fmt.Errorf("enqueue import job: %w", err)
@@ -324,18 +337,22 @@ type jobScanner interface {
 
 func scanJob(row jobScanner) (Job, error) {
 	var job Job
-	var progress []byte
+	var payload, progress []byte
 	err := row.Scan(
-		&job.ID, &job.Type, &job.Status, &job.Provider, &job.ExternalID, &progress,
+		&job.ID, &job.Type, &job.Status, &job.Provider, &job.ExternalID, &payload, &progress,
 		&job.Attempt, &job.MaxAttempts, &job.NextAttemptAt, &job.LockedAt, &job.LockedBy, &job.LastError,
 		&job.CreatedAt, &job.StartedAt, &job.FinishedAt,
 	)
 	if err != nil {
 		return Job{}, err
 	}
+	if len(payload) == 0 {
+		payload = []byte(`{}`)
+	}
 	if len(progress) == 0 {
 		progress = []byte(`{}`)
 	}
+	job.Payload = payload
 	job.Progress = progress
 	return job, nil
 }

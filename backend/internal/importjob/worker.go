@@ -204,12 +204,36 @@ func (w *Worker) processAudio(ctx context.Context, job Job, result catalog.Impor
 	}
 
 	externalIDs := make([]string, 0, len(result.RecordingIDs))
-	for externalID := range result.RecordingIDs {
+	recordingIDs := make([]string, 0, len(result.RecordingIDs))
+	for externalID, recordingID := range result.RecordingIDs {
 		externalIDs = append(externalIDs, externalID)
+		recordingIDs = append(recordingIDs, recordingID)
 	}
 	sort.Strings(externalIDs)
 
+	playable := map[string]bool{}
+	if syncJob(job) {
+		lookup, ok := w.Audio.(interface {
+			Playable(context.Context, []string) (map[string]bool, error)
+		})
+		if !ok {
+			return marshalProgress(doc), errors.New("audio playable lookup is not configured")
+		}
+		ready, err := lookup.Playable(ctx, recordingIDs)
+		if err != nil {
+			return marshalProgress(doc), err
+		}
+		playable = ready
+	}
+
 	for _, externalID := range externalIDs {
+		if playable[result.RecordingIDs[externalID]] {
+			audioReady++
+			if saveErr := w.persistProgress(ctx, job, doc); saveErr != nil {
+				return marshalProgress(doc), saveErr
+			}
+			continue
+		}
 		if ctx.Err() != nil {
 			return marshalProgress(doc), ctx.Err()
 		}
@@ -291,6 +315,19 @@ type progressDocument struct {
 	RecordingsImported int    `json:"recordings_imported"`
 	AudioReady         *int   `json:"audio_ready,omitempty"`
 	AudioFailed        *int   `json:"audio_failed,omitempty"`
+}
+
+func syncJob(job Job) bool {
+	var body struct {
+		Sync bool `json:"sync"`
+	}
+	if len(job.Payload) == 0 {
+		return false
+	}
+	if err := json.Unmarshal(job.Payload, &body); err != nil {
+		return false
+	}
+	return body.Sync
 }
 
 func snapshot(ctx context.Context, source CatalogSource, providerName, externalID string) (catalog.ArtistImport, error) {

@@ -1,6 +1,7 @@
 package importjob
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/helltale/music/backend/internal/catalog"
 	"github.com/helltale/music/backend/internal/platform"
 )
 
@@ -21,10 +23,16 @@ const (
 
 var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// syncLookup finds the provider id of an artist already stored in the catalog.
+type syncLookup interface {
+	SyncSubject(ctx context.Context, artistID string) (providerName, externalID string, err error)
+}
+
 // Mount registers the import job HTTP routes.
-func Mount(mux *http.ServeMux, store *Store, catalogs map[string]CatalogSource) {
-	h := handler{store: store, catalogs: catalogs}
+func Mount(mux *http.ServeMux, store *Store, catalogs map[string]CatalogSource, artists syncLookup) {
+	h := handler{store: store, catalogs: catalogs, artists: artists}
 	mux.HandleFunc("POST /api/v1/admin/catalog/artists/import", h.importArtist)
+	mux.HandleFunc("POST /api/v1/admin/artists/{id}/sync", h.syncArtist)
 	mux.HandleFunc("GET /api/v1/admin/import-jobs", h.list)
 	mux.HandleFunc("GET /api/v1/admin/import-jobs/{id}", h.get)
 	mux.HandleFunc("POST /api/v1/admin/import-jobs/{id}/retry", h.retry)
@@ -33,6 +41,7 @@ func Mount(mux *http.ServeMux, store *Store, catalogs map[string]CatalogSource) 
 type handler struct {
 	store    *Store
 	catalogs map[string]CatalogSource
+	artists  syncLookup
 }
 
 func (h handler) importArtist(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +68,47 @@ func (h handler) importArtist(w http.ResponseWriter, r *http.Request) {
 	result, err := h.store.Enqueue(r.Context(), body.Provider, body.ExternalID)
 	if err != nil {
 		slog.Error("enqueue import", "request_id", w.Header().Get("X-Request-Id"), "error", err.Error())
+		platform.WriteError(w, http.StatusInternalServerError, "INTERNAL", "Internal error")
+		return
+	}
+	status := http.StatusOK
+	if result.Created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, jobDocument(result.Job))
+}
+
+func (h handler) syncArtist(w http.ResponseWriter, r *http.Request) {
+	if _, err := io.Copy(io.Discard, r.Body); err != nil {
+		platform.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid body")
+		return
+	}
+	id := r.PathValue("id")
+	if !uuidPattern.MatchString(id) {
+		platform.WriteError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Invalid artist id")
+		return
+	}
+	providerName, externalID, err := h.artists.SyncSubject(r.Context(), id)
+	if errors.Is(err, catalog.ErrNotFound) {
+		platform.WriteError(w, http.StatusNotFound, "ARTIST_NOT_FOUND", "Artist not found")
+		return
+	}
+	if errors.Is(err, catalog.ErrNotSyncable) {
+		platform.WriteError(w, http.StatusConflict, "ARTIST_NOT_SYNCABLE", "Artist has no single provider id")
+		return
+	}
+	if err != nil {
+		slog.Error("sync artist", "request_id", w.Header().Get("X-Request-Id"), "error", err.Error())
+		platform.WriteError(w, http.StatusInternalServerError, "INTERNAL", "Internal error")
+		return
+	}
+	if _, ok := h.catalogs[providerName]; !ok {
+		platform.WriteError(w, http.StatusConflict, "ARTIST_NOT_SYNCABLE", "Unknown provider")
+		return
+	}
+	result, err := h.store.EnqueueSync(r.Context(), providerName, externalID)
+	if err != nil {
+		slog.Error("enqueue sync", "request_id", w.Header().Get("X-Request-Id"), "error", err.Error())
 		platform.WriteError(w, http.StatusInternalServerError, "INTERNAL", "Internal error")
 		return
 	}

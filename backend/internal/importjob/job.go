@@ -33,6 +33,7 @@ type Job struct {
 	Status        string
 	Provider      string
 	ExternalID    string
+	Payload       json.RawMessage
 	Progress      json.RawMessage
 	Attempt       int
 	MaxAttempts   int

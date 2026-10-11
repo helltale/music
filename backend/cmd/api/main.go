@@ -65,7 +65,7 @@ func main() {
 		os.Exit(1)
 	}
 	catalog.Mount(mux, catalog.NewStore(db), provider.SearchList{fake, brainz}, audio.NewStore(db))
-	importjob.Mount(mux, importjob.NewStore(db), catalogs)
+	importjob.Mount(mux, importjob.NewStore(db), catalogs, catalog.NewStore(db))
 	streaming.Mount(mux, &streaming.Service{
 		Recordings: catalog.NewStore(db),
 		Assets:     audio.NewStore(db),
