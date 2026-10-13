@@ -93,8 +93,8 @@ func (e *ffmpegError) Unwrap() error {
 	return e.err
 }
 
-func transcode(ctx context.Context, source, dest string) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg",
+func transcode(ctx context.Context, source, dest string, tags TrackTags) error {
+	args := []string{
 		"-y",
 		"-i", source,
 		"-vn",
@@ -102,9 +102,10 @@ func transcode(ctx context.Context, source, dest string) error {
 		"-c:a", "aac",
 		"-b:a", "192k",
 		"-ac", "2",
-		"-movflags", "+faststart",
-		dest,
-	)
+	}
+	args = append(args, metadataArgs(tags)...)
+	args = append(args, "-movflags", "+faststart", dest)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -115,6 +116,27 @@ func transcode(ctx context.Context, source, dest string) error {
 		return &ffmpegError{err: err, detail: text}
 	}
 	return nil
+}
+
+func metadataArgs(tags TrackTags) []string {
+	var args []string
+	for _, item := range []struct {
+		key   string
+		value string
+	}{
+		{key: "title", value: tags.Title},
+		{key: "artist", value: tags.Artist},
+		{key: "album", value: tags.Album},
+	} {
+		value := strings.TrimSpace(item.value)
+		if value == "" {
+			continue
+		}
+		value = strings.ReplaceAll(value, "\n", " ")
+		value = strings.ReplaceAll(value, "\r", " ")
+		args = append(args, "-metadata", item.key+"="+value)
+	}
+	return args
 }
 
 func milliseconds(raw string) int {

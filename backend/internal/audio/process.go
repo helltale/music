@@ -28,11 +28,18 @@ type Processor struct {
 	// this generation. The import worker uses it to store job progress.
 	// Nil skips it. SetAfterPublish replaces it for the next Process call.
 	AfterPublish func(ctx context.Context, tx pgx.Tx) error
+	// trackTags is consumed by the next Process call, then cleared.
+	trackTags TrackTags
 }
 
 // SetAfterPublish installs the hook that commits together with READY.
 func (p *Processor) SetAfterPublish(fn func(context.Context, pgx.Tx) error) {
 	p.AfterPublish = fn
+}
+
+// SetTrackTags installs artist, album, and title for the next Process call.
+func (p *Processor) SetTrackTags(tags TrackTags) {
+	p.trackTags = tags
 }
 
 // Playable reports which recordings already have a READY playable file.
@@ -44,8 +51,10 @@ func (p *Processor) Playable(ctx context.Context, recordingIDs []string) (map[st
 // workID is the temp directory segment ({TempDir}/{workID}/{recordingID}/).
 // The same checksum on an existing READY asset does not upload again.
 func (p *Processor) Process(ctx context.Context, recordingID, sourceProvider, externalID, workID string) (Asset, error) {
+	tags := p.trackTags
+	p.trackTags = TrackTags{}
 	store := NewStore(p.DB)
-	work, err := p.stage(ctx, recordingID, externalID, workID)
+	work, err := p.stage(ctx, recordingID, externalID, workID, tags)
 	if err != nil {
 		return p.failEarly(ctx, store, recordingID, sourceProvider, err)
 	}
@@ -66,7 +75,7 @@ func (p *Processor) Process(ctx context.Context, recordingID, sourceProvider, ex
 	}
 	procCtx, cancel := context.WithTimeout(ctx, p.timeout())
 	defer cancel()
-	ready, err := p.encodeAndStore(procCtx, store, recordingID, generation, work)
+	ready, err := p.encodeAndStore(procCtx, store, recordingID, generation, work, tags)
 	if err != nil {
 		if errors.Is(err, ErrSuperseded) || errors.Is(err, ErrLeaseLost) {
 			return Asset{}, err
@@ -90,10 +99,17 @@ type staged struct {
 	ext         string
 }
 
-func (p *Processor) stage(ctx context.Context, recordingID, externalID, workID string) (staged, error) {
+func (p *Processor) stage(ctx context.Context, recordingID, externalID, workID string, tags TrackTags) (staged, error) {
 	source, reference, err := p.Source.Open(ctx, externalID)
 	if err != nil {
 		return staged{}, err
+	}
+	if !tags.empty() {
+		transformed, err := (AudioMetadataTransformer{TempDir: p.TempDir, MaxBytes: p.MaxBytes}).Transform(ctx, source, tags)
+		if err != nil {
+			return staged{}, err
+		}
+		source = transformed
 	}
 	defer source.Close()
 
@@ -150,12 +166,12 @@ func (p *Processor) stage(ctx context.Context, recordingID, externalID, workID s
 	}, nil
 }
 
-func (p *Processor) encodeAndStore(ctx context.Context, store *Store, recordingID string, generation int, work staged) (Asset, error) {
+func (p *Processor) encodeAndStore(ctx context.Context, store *Store, recordingID string, generation int, work staged, tags TrackTags) (Asset, error) {
 	if err := store.MarkProcessing(ctx, recordingID, generation); err != nil {
 		return Asset{}, err
 	}
 	playablePath := filepath.Join(work.dir, "playable.m4a")
-	if err := transcode(ctx, work.original, playablePath); err != nil {
+	if err := transcode(ctx, work.original, playablePath, tags); err != nil {
 		return Asset{}, err
 	}
 	info, err := probeFile(ctx, playablePath)

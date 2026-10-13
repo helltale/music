@@ -162,33 +162,28 @@ func (f *FreeDownload) download(ctx context.Context, fileURL string) (io.ReadClo
 	if attempts < 1 {
 		attempts = freeDownloadAttempts
 	}
+	adapter := f.payloadSource()
 	var last error
 	for attempt := 0; attempt < attempts; attempt++ {
 		if err := f.wait(ctx); err != nil {
 			return nil, "", err
 		}
-		resp, err := f.do(ctx, f.fileClient(), fileURL)
-		if errors.Is(err, ErrSourceNotFound) {
-			return nil, "", ErrSourceNotFound
+		body, err := adapter.DownloadPayload(ctx, fileURL)
+		if err == nil {
+			reference := fileURL
+			if ref, ok := body.(interface{ SourceReference() string }); ok && ref.SourceReference() != "" {
+				reference = ref.SourceReference()
+			}
+			return body, reference, nil
 		}
-		if err != nil {
-			last = err
-			continue
+		if errors.Is(err, ErrSourceNotFound) || ctx.Err() != nil {
+			return nil, "", err
 		}
-		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-			resp.Body.Close()
-			return nil, "", ErrSourceNotFound
+		var fetch *fetchError
+		if errors.As(err, &fetch) && !fetch.temporary {
+			return nil, "", err
 		}
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode >= 500 {
-			resp.Body.Close()
-			last = fmt.Errorf("free download status %d", resp.StatusCode)
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, "", fmt.Errorf("free download status %d", resp.StatusCode)
-		}
-		return f.audioBody(resp, fileURL)
+		last = err
 	}
 	if last == nil {
 		last = errors.New("free download request failed")
@@ -196,31 +191,12 @@ func (f *FreeDownload) download(ctx context.Context, fileURL string) (io.ReadClo
 	return nil, "", last
 }
 
-func (f *FreeDownload) audioBody(resp *http.Response, fileURL string) (io.ReadCloser, string, error) {
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, "", fmt.Errorf("free download status %d", resp.StatusCode)
+func (f *FreeDownload) payloadSource() MediaSourceAdapter {
+	return &GenericHTTPAdapter{
+		UserAgent:    f.UserAgent,
+		AllowHTTP:    f.AllowHTTP,
+		AllowPrivate: f.AllowPrivate,
 	}
-	if !audioContentType(resp.Header.Get("Content-Type")) {
-		resp.Body.Close()
-		return nil, "", ErrSourceNotFound
-	}
-	prefix := make([]byte, 16)
-	n, readErr := io.ReadFull(resp.Body, prefix)
-	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
-		resp.Body.Close()
-		return nil, "", readErr
-	}
-	if n == 0 || looksLikeHTML(prefix[:n]) {
-		resp.Body.Close()
-		return nil, "", ErrSourceNotFound
-	}
-	reference := fileURL
-	if resp.Request != nil && resp.Request.URL != nil && f.allowedURL(resp.Request.URL) {
-		reference = resp.Request.URL.String()
-	}
-	reader := io.MultiReader(bytes.NewReader(prefix[:n]), resp.Body)
-	return &closeBody{Reader: reader, closer: resp.Body}, reference, nil
 }
 
 func (f *FreeDownload) getJSON(ctx context.Context, rawURL string, dest any) error {
@@ -294,67 +270,12 @@ func (f *FreeDownload) lookupClient() *http.Client {
 	return &http.Client{Timeout: freeDownloadMetadataWait, CheckRedirect: f.sameHostRedirect}
 }
 
-func (f *FreeDownload) fileClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if err := f.publicAddr(ctx, addr); err != nil {
-			return nil, err
-		}
-		return dialer.DialContext(ctx, network, addr)
-	}
-	return &http.Client{
-		Timeout:       freeDownloadFileWait,
-		Transport:     transport,
-		CheckRedirect: f.audioRedirect,
-	}
-}
-
 func (f *FreeDownload) sameHostRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 3 {
 		return errors.New("free download redirect limit")
 	}
 	if req.URL.Host != via[0].URL.Host {
 		return ErrSourceNotFound
-	}
-	return nil
-}
-
-func (f *FreeDownload) audioRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= 5 {
-		return errors.New("free download redirect limit")
-	}
-	if !f.allowedURL(req.URL) || deniedHost(req.URL.Hostname()) {
-		return ErrSourceNotFound
-	}
-	return nil
-}
-
-func (f *FreeDownload) publicAddr(ctx context.Context, addr string) error {
-	if f.AllowPrivate {
-		return nil
-	}
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return ErrSourceNotFound
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !publicIP(ip) {
-			return ErrSourceNotFound
-		}
-		return nil
-	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return err
-	}
-	if len(ips) == 0 {
-		return ErrSourceNotFound
-	}
-	for _, ip := range ips {
-		if !publicIP(ip.IP) {
-			return ErrSourceNotFound
-		}
 	}
 	return nil
 }
@@ -550,13 +471,6 @@ func publicIP(ip net.IP) bool {
 	}
 	return true
 }
-
-type closeBody struct {
-	io.Reader
-	closer io.Closer
-}
-
-func (b *closeBody) Close() error { return b.closer.Close() }
 
 var errFreeNotFound = errors.New("free download not found")
 
