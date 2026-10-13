@@ -78,7 +78,7 @@ services:
     restart: "no"
 
   migrate:
-    image: music-api:dev
+    image: ${MUSIC_API_IMAGE:-music-api:dev}
     build:
       context: ../..
       dockerfile: backend/Dockerfile.api
@@ -91,7 +91,7 @@ services:
     restart: "no"
 
   music-api:
-    image: music-api:dev
+    image: ${MUSIC_API_IMAGE:-music-api:dev}
     build:
       context: ../..
       dockerfile: backend/Dockerfile.api
@@ -111,7 +111,7 @@ services:
     restart: unless-stopped
 
   music-worker:
-    image: music-worker:dev
+    image: ${MUSIC_WORKER_IMAGE:-music-worker:dev}
     build:
       context: ../..
       dockerfile: backend/Dockerfile.worker
@@ -131,7 +131,7 @@ services:
     restart: unless-stopped
 
   music-web:
-    image: music-web:dev
+    image: ${MUSIC_WEB_IMAGE:-music-web:dev}
     build:
       context: ../..
       dockerfile: frontend/Dockerfile

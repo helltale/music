@@ -163,19 +163,28 @@ PostgreSQL и Object Storage в поды приложения не кладут�
 
 ## Stage и registry
 
-Целевая цепочка, без реализации в Phase 0:
+Pipeline — `.github/workflows/ci.yml`. Порядок один:
 
 ```text
-commit
-  -> CI: go test, go vet, проверки frontend, integration tests
+gofmt, go vet, npm run build
+  -> go test platform и catalog/provider
+  -> integration: catalog, importjob, audio, streaming на Postgres и MinIO
   -> docker build один раз
-  -> registry: music-api:git-<sha>, music-worker:git-<sha>, music-web:git-<sha>
-  -> stage и production запускают этот тег
+  -> ghcr.io/<owner>/music-api:git-<sha>
+     ghcr.io/<owner>/music-worker:git-<sha>
+     ghcr.io/<owner>/music-web:git-<sha>
 ```
 
-На стенде нет `git clone`, `go build`, `npm install` и `docker build`. Образ не пересобирается между stage и production.
+Скрипт `deploy/ci/build-images.sh` собирает каждый Dockerfile один раз. Stage и production этот шаг не повторяют. Тег `latest` не ставится. В метках образа есть `org.opencontainers.image.revision` — полный SHA. Push в GHCR выполняется только для push в `main`. Pull request собирает те же образы и не публикует их.
 
-Тег `latest` не используется как имя выкладки. Откат — смена тега на предыдущий SHA.
+На стенде нет `git clone`, `go build`, `npm install` и `docker build`. В `.env` задаются `MUSIC_API_IMAGE`, `MUSIC_WORKER_IMAGE` и `MUSIC_WEB_IMAGE` на один и тот же тег или digest. `migrate` использует образ API. Запуск:
+
+```bash
+docker compose pull music-api music-worker music-web
+docker compose up -d --no-build
+```
+
+Откат — смена тега на предыдущий SHA. Локально переменные пустые, и Compose по-прежнему собирает `music-api:dev`, `music-worker:dev`, `music-web:dev`.
 
 ## Kubernetes позже
 

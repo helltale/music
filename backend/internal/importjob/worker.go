@@ -35,8 +35,8 @@ type Worker struct {
 	DB    interface {
 		Begin(context.Context) (pgx.Tx, error)
 	}
-	Catalogs  map[string]CatalogSource
-	Audio     recordingAudio
+	Catalogs     map[string]CatalogSource
+	Audio        recordingAudio
 	WorkerID     string
 	Lease        time.Duration
 	Heartbeat    time.Duration
