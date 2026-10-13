@@ -1,9 +1,11 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -91,6 +93,22 @@ func TestMiddlewareRequestIDAndNotFound(t *testing.T) {
 	}
 	if body.Error.Code != "NOT_FOUND" {
 		t.Fatalf("code %s", body.Error.Code)
+	}
+}
+
+func TestMiddlewareRejectsOversizedBody(t *testing.T) {
+	handler := Middleware(NewLogger(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		if err == nil {
+			t.Fatal("oversized body was accepted")
+		}
+		WriteError(w, http.StatusRequestEntityTooLarge, "VALIDATION_ERROR", "Body is too large")
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/catalog/artists/import", bytes.NewReader(bytes.Repeat([]byte("a"), int(maxRequestBytes)+1)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d", rec.Code)
 	}
 }
 
