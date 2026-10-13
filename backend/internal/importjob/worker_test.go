@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/helltale/music/backend/internal/audio"
+	"github.com/helltale/music/backend/internal/catalog"
 	"github.com/helltale/music/backend/internal/catalog/provider"
 )
 
@@ -82,6 +84,77 @@ func TestWorkerImportsFakeCatalog(t *testing.T) {
 	}
 	cancel()
 	waitDone(t, done)
+}
+
+func TestRecordingTagsPrefersSmallerRelease(t *testing.T) {
+	tags := recordingTags(catalog.ArtistImport{
+		Name: "Test Artist",
+		Releases: []catalog.ReleaseImport{
+			{
+				ExternalID: "first-album-deluxe",
+				Title:      "First Album Deluxe",
+				Tracks: []catalog.TrackImport{
+					{ExternalID: "track-one", Title: "Track One"},
+					{ExternalID: "track-three", Title: "Track Three"},
+				},
+			},
+			{
+				ExternalID: "first-album",
+				Title:      "First Album",
+				Tracks: []catalog.TrackImport{
+					{ExternalID: "track-one", Title: "Track One"},
+					{ExternalID: "track-two", Title: "Track Two"},
+				},
+			},
+		},
+	})
+	if tags["track-one"] != (audio.TrackTags{Artist: "Test Artist", Album: "First Album", Title: "Track One"}) {
+		t.Fatalf("track-one = %+v", tags["track-one"])
+	}
+	if tags["track-two"] != (audio.TrackTags{Artist: "Test Artist", Album: "First Album", Title: "Track Two"}) {
+		t.Fatalf("track-two = %+v", tags["track-two"])
+	}
+	if tags["track-three"] != (audio.TrackTags{Artist: "Test Artist", Album: "First Album Deluxe", Title: "Track Three"}) {
+		t.Fatalf("track-three = %+v", tags["track-three"])
+	}
+}
+
+func TestWorkerPassesTrackTags(t *testing.T) {
+	ctx := context.Background()
+	if err := removeDemoCatalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := removeDemoCatalog(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	pushOtherJobs(t)
+	enqueued, err := NewStore(testPool).Enqueue(ctx, provider.ProviderFake, "test-artist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline := &scriptedAudio{}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := startWorkerWithAudio(t, runCtx, map[string]CatalogSource{provider.ProviderFake: provider.NewFake()}, pipeline)
+	waitStatus(t, enqueued.Job.ID, StatusCompleted)
+	cancel()
+	waitDone(t, done)
+	seen := pipeline.tagsSeen()
+	want := map[string]audio.TrackTags{
+		"track-one":   {Artist: "Test Artist", Album: "First Album", Title: "Track One"},
+		"track-two":   {Artist: "Test Artist", Album: "First Album", Title: "Track Two"},
+		"track-three": {Artist: "Test Artist", Album: "First Album Deluxe", Title: "Track Three"},
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("tags = %+v", seen)
+	}
+	for id, tags := range want {
+		if seen[id] != tags {
+			t.Fatalf("%s = %+v", id, seen[id])
+		}
+	}
 }
 
 func TestTwoWorkersOneJob(t *testing.T) {
@@ -456,15 +529,40 @@ func waitRequeued(t *testing.T, id string) {
 }
 
 type scriptedAudio struct {
-	errs map[string]error
-	hook func(context.Context, pgx.Tx) error
+	errs    map[string]error
+	hook    func(context.Context, pgx.Tx) error
+	mu      sync.Mutex
+	pending audio.TrackTags
+	seen    map[string]audio.TrackTags
 }
 
 func (s *scriptedAudio) SetAfterPublish(fn func(context.Context, pgx.Tx) error) {
 	s.hook = fn
 }
 
+func (s *scriptedAudio) SetTrackTags(tags audio.TrackTags) {
+	s.mu.Lock()
+	s.pending = tags
+	s.mu.Unlock()
+}
+
+func (s *scriptedAudio) tagsSeen() map[string]audio.TrackTags {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]audio.TrackTags, len(s.seen))
+	for id, tags := range s.seen {
+		out[id] = tags
+	}
+	return out
+}
+
 func (s *scriptedAudio) Process(ctx context.Context, recordingID, _, externalID, _ string) (audio.Asset, error) {
+	s.mu.Lock()
+	if s.seen == nil {
+		s.seen = map[string]audio.TrackTags{}
+	}
+	s.seen[externalID] = s.pending
+	s.mu.Unlock()
 	if err := s.errs[externalID]; err != nil {
 		return audio.Asset{}, err
 	}

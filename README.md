@@ -23,3 +23,5 @@ Web UI: <http://localhost:3000>. Пробы API: <http://localhost:8080/health> 
 
 !! поправить модуль скачивания треков через yt-dlp
 https://github.com/yt-dlp/yt-dlp
+
+https://share.google/aimode/3lJ3v92zIrLD6Xm4f

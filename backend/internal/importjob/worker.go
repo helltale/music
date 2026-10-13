@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,9 +25,11 @@ type CatalogSource interface {
 
 // recordingAudio turns one imported recording into a playable asset.
 // SetAfterPublish attaches the job progress update to the READY transaction.
+// SetTrackTags supplies artist, album, and title for the next Process call.
 type recordingAudio interface {
 	Process(ctx context.Context, recordingID, sourceProvider, externalID, workID string) (audio.Asset, error)
 	SetAfterPublish(func(context.Context, pgx.Tx) error)
+	SetTrackTags(audio.TrackTags)
 }
 
 // Worker claims jobs, imports their catalog, and processes audio for each recording.
@@ -202,10 +205,10 @@ func (w *Worker) importCatalog(ctx context.Context, job Job) (json.RawMessage, e
 	if len(result.RecordingIDs) == 0 {
 		return latest, nil
 	}
-	return w.processAudio(ctx, job, result, doc)
+	return w.processAudio(ctx, job, body, result, doc)
 }
 
-func (w *Worker) processAudio(ctx context.Context, job Job, result catalog.ImportResult, doc progressDocument) (json.RawMessage, error) {
+func (w *Worker) processAudio(ctx context.Context, job Job, snapshot catalog.ArtistImport, result catalog.ImportResult, doc progressDocument) (json.RawMessage, error) {
 	if w.Audio == nil {
 		return marshalProgress(doc), errors.New("audio processor is not configured")
 	}
@@ -224,6 +227,7 @@ func (w *Worker) processAudio(ctx context.Context, job Job, result catalog.Impor
 		recordingIDs = append(recordingIDs, recordingID)
 	}
 	sort.Strings(externalIDs)
+	tags := recordingTags(snapshot)
 
 	playable := map[string]bool{}
 	if syncJob(job) {
@@ -264,6 +268,7 @@ func (w *Worker) processAudio(ctx context.Context, job Job, result catalog.Impor
 			published = true
 			return nil
 		})
+		w.Audio.SetTrackTags(tags[externalID])
 		_, err := w.Audio.Process(ctx, result.RecordingIDs[externalID], audio.ProviderLocal, externalID, job.ID)
 		if ctx.Err() != nil {
 			return marshalProgress(doc), ctx.Err()
@@ -329,6 +334,40 @@ type progressDocument struct {
 	RecordingsImported int    `json:"recordings_imported"`
 	AudioReady         *int   `json:"audio_ready,omitempty"`
 	AudioFailed        *int   `json:"audio_failed,omitempty"`
+}
+
+// recordingTags picks artist, album, and title for each recording external id.
+// A recording that appears on several releases uses the release with the smaller external id.
+func recordingTags(in catalog.ArtistImport) map[string]audio.TrackTags {
+	type choice struct {
+		releaseID string
+		tags      audio.TrackTags
+	}
+	chosen := map[string]choice{}
+	artist := strings.TrimSpace(in.Name)
+	for _, release := range in.Releases {
+		album := strings.TrimSpace(release.Title)
+		for _, track := range release.Tracks {
+			next := choice{
+				releaseID: release.ExternalID,
+				tags: audio.TrackTags{
+					Artist: artist,
+					Album:  album,
+					Title:  strings.TrimSpace(track.Title),
+				},
+			}
+			current, ok := chosen[track.ExternalID]
+			if ok && current.releaseID <= next.releaseID {
+				continue
+			}
+			chosen[track.ExternalID] = next
+		}
+	}
+	out := make(map[string]audio.TrackTags, len(chosen))
+	for id, item := range chosen {
+		out[id] = item.tags
+	}
+	return out
 }
 
 func syncJob(job Job) bool {

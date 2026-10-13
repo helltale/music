@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.0
+	github.com/bogem/id3v2 v1.2.0
 	github.com/jackc/pgx/v5 v5.7.6
 	golang.org/x/text v0.24.0
 )
