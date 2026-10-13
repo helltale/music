@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+images:
+  - name: ghcr.io/helltale/music-api
+    newTag: git-unset
+  - name: ghcr.io/helltale/music-worker
+    newTag: git-unset
+  - name: ghcr.io/helltale/music-web
+    newTag: git-unset

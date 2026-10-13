@@ -124,7 +124,7 @@ Multi-stage сборка.
 
 `cmd/migrate` применяет `*.up.sql` из `backend/migrations` по имени файла и выходит с 0. Служебная таблица `schema_migrations` хранит уже применённые версии. Повторный запуск их не исполняет снова. Доменные миграции: `0001_catalog.up.sql`, `0002_import_jobs.up.sql`, `0003_audio_assets.up.sql` и `0004_artist_sync.up.sql`.
 
-Несколько API не мигрируют схему при старте. В Compose это отдельный завершившийся сервис. В Kubernetes позже это Job перед выкладкой новых Pod или шаг CI/CD. Образ тот же `music-api`, команда другая.
+Несколько API не мигрируют схему при старте. В Compose это отдельный завершившийся сервис. В Kubernetes это Job `music-migrate` из того же образа `music-api`, команда `/app/migrate`. Job завершается до выкладки Deployment.
 
 ## Сеть playback
 
@@ -141,7 +141,7 @@ API: `GET /health`, `GET /ready` на `8080`.
 
 Worker: те же пути на `8081`.
 
-`/ready` отдаёт 503 с момента получения `SIGTERM`, затем процесс дорабатывает запросы (API, до 25 секунд) или снимает lock текущего job (worker) и закрывает пул. В будущем это `readinessProbe` и `livenessProbe` без изменений бизнес-логики. Liveness смотрит на `/health` и не ходит в базу.
+`/ready` отдаёт 503 с момента получения `SIGTERM`, затем процесс дорабатывает запросы (API, до 25 секунд) или снимает lock текущего job (worker) и закрывает пул. В Kubernetes `readinessProbe` смотрит на `/ready`, `livenessProbe` — на `/health` и в базу не ходит.
 
 ## Логи
 
@@ -186,23 +186,43 @@ docker compose up -d --no-build
 
 Откат — смена тега на предыдущий SHA. Локально переменные пустые, и Compose по-прежнему собирает `music-api:dev`, `music-worker:dev`, `music-web:dev`.
 
-## Kubernetes позже
+## Kubernetes
 
-Манифестов в репозитории нет, каталог `deploy/kubernetes` не создаётся, пока не начнётся соответствующий Phase.
-
-Ожидаемая форма, под которую уже пишется приложение:
+Манифесты лежат в `deploy/kubernetes`. Helm нет: тег образа задаётся в `deploy/kubernetes/components/images/kustomization.yaml`, число реплик — в `deploy/kubernetes/kustomization.yaml`.
 
 ```text
-Ingress
-  -> music-web (N)
-  -> music-api (N) -> PostgreSQL
-                 ^
-                 music-worker (N) -> Object Storage
+Ingress music.local
+  -> Service music-web (N)
+       -> music-api (N) -> PostgreSQL вне кластера
+                        ^
+                        music-worker (N) -> Object Storage вне кластера
 ```
 
-Миграции — Job. Секреты — Secrets. Несекретная конфигурация — ConfigMap или env. У контейнеров будут requests и limits. Rolling update опирается на `/ready` и на обработку `SIGTERM`, которая уже есть.
+PostgreSQL и Object Storage в поды не входят. Их адреса и ключи подставляются в ConfigMap `music` и Secret `music` до apply. В репозитории у Secret стоят значения `CHANGE_ME` и хосты `postgres.example` / `minio.example`.
 
-Бизнес-логика под Kubernetes не переписывается.
+| Ресурс | Имя | Зачем |
+| --- | --- | --- |
+| Deployment | `music-api`, `music-worker`, `music-web` | По 2 реплики, RollingUpdate `maxUnavailable: 0`, `maxSurge: 1` |
+| Service | те же имена | ClusterIP. Снаружи опубликован только web |
+| Ingress | `music` | `music.local` → `music-web:3000`, класс `nginx` |
+| ConfigMap | `music` | Несекретные переменные, включая `API_UPSTREAM=http://music-api:8080` |
+| Secret | `music` | `DATABASE_URL`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` |
+| Job | `music-migrate` | Тот же образ API, команда `/app/migrate`, один прогон |
+
+Пробы API и worker: liveness `GET /health`, readiness `GET /ready`. Liveness в базу не ходит. `terminationGracePeriodSeconds: 40` покрывает `SHUTDOWN_TIMEOUT` 25s. У web проб `/health` нет, поэтому liveness и readiness смотрят `GET /` на порту 3000.
+
+У API пользователь `65532` (distroless nonroot), у worker и web — `10001`. У worker временные файлы FFmpeg лежат на `emptyDir` `/tmp/music-audio`.
+
+Масштаб — число реплик Deployment. Отдельного лидера нет. Пример: `kubectl scale -n music deployment/music-api --replicas=3`. То же для `music-worker`.
+
+Порядок выкладки, чтобы реплики не стартовали до миграции:
+
+```bash
+# в components/images/kustomization.yaml поставить тег git-<sha> из GHCR
+./deploy/kubernetes/apply.sh
+```
+
+Скрипт удаляет предыдущий Job `music-migrate` (спека Job неизменяема), применяет Namespace, ConfigMap, Secret и Job, ждёт `condition=complete`, затем применяет Deployment, Service и Ingress. Для приватного пакета GHCR перед этим создаётся `imagePullSecret` и добавляется в `spec.template.spec` каждого Pod. Бизнес-логика приложения для этих манифестов не менялась.
 
 ## Локальные учётные данные
 

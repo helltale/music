@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: music
+  namespace: music
+  labels:
+    app.kubernetes.io/name: music
+data:
+  HTTP_ADDR: "0.0.0.0:8080"
+  WORKER_HEALTH_ADDR: "0.0.0.0:8081"
+  S3_ENDPOINT: "http://minio.example:9000"
+  S3_PUBLIC_ENDPOINT: "http://minio.example:9000"
+  S3_BUCKET: music
+  S3_REGION: us-east-1
+  S3_USE_SSL: "false"
+  S3_USE_PATH_STYLE: "true"
+  AUDIO_TEMP_DIR: /tmp/music-audio
+  AUDIO_MAX_BYTES: "209715200"
+  AUDIO_PROCESS_TIMEOUT: 10m
+  PLAYBACK_URL_TTL: 1h
+  LOCAL_AUDIO_DIR: /app/testdata/audio
+  MUSICBRAINZ_BASE_URL: https://musicbrainz.org/ws/2
+  MUSICBRAINZ_USER_AGENT: "music/1.0 ( https://github.com/helltale/music )"
+  API_UPSTREAM: http://music-api:8080
+  LEASE_TIMEOUT: 2m
+  LEASE_HEARTBEAT: 30s
+  SYNC_INTERVAL: 24h
+  SHUTDOWN_TIMEOUT: 25s
+  MIGRATIONS_DIR: /app/migrations

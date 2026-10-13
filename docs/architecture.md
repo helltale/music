@@ -1,6 +1,6 @@
 # Архитектура
 
-Статус: Phase 15 — CI собирает образы один раз и публикует тег `git-<sha>`. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
+Статус: Phase 16 — Kubernetes-манифесты для уже собранного тега `git-<sha>`. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
 
 Связанные документы:
 
@@ -352,7 +352,7 @@ Worker:
 
 Сервис `migrate` запускает бинарь из образа `music-api` и завершается. `music-api` и `music-worker` стартуют только после `service_completed_successfully`. API при старте схему не меняет. Нужен Docker Compose v2.
 
-Позже тот же бинарь запускается Kubernetes Job или шагом CI/CD, не из каждой реплики.
+В Kubernetes тот же бинарь запускает Job `music-migrate` до Deployment, не каждая реплика API.
 
 ### 13. Один образ на stage и production
 
@@ -368,7 +368,7 @@ Phase 14 не меняет pipeline. Проверено тестами: один
 
 - микросервисы, NATS, Kafka, transactional outbox, Redis;
 - Elasticsearch, OpenSearch, ClickHouse, `pg_trgm`;
-- Kubernetes manifests, Helm, service mesh;
+- Helm, service mesh;
 - HLS, DASH, adaptive bitrate, таблицу `audio_variants`;
 - рекомендации, соцфункции, DRM, мобильные клиенты;
 - аутентификацию и авторизацию;

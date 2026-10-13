@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: music
+  namespace: music
+  labels:
+    app.kubernetes.io/name: music
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: music.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: music-web
+                port:
+                  name: http
