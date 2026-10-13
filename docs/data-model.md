@@ -33,10 +33,17 @@ FK стоят только внутри Catalog. `audio_assets.recording_id` с�
 | `name` | `text` | NOT NULL, длина > 0 |
 | `description` | `text` | NULL |
 | `image_object_key` | `text` | NULL. На MVP не заполняется |
+| `sync_enabled` | `boolean` | NOT NULL, default `false` |
+| `last_synced_at` | `timestamptz` | NULL. Время последнего завершённого импорта этого артиста |
+| `next_sync_at` | `timestamptz` | NULL. Когда планировщик поставит следующий job. Заполняется только при `sync_enabled` |
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
 | `updated_at` | `timestamptz` | NOT NULL |
 
 Уникальности по `name` нет: два разных артиста могут называться одинаково.
+
+`last_synced_at` в `artist_external_ids` — другое поле: оно отмечает запись внешнего id. Колонки артиста относятся к автоматическому обновлению каталога.
+
+Индекс `artists_sync_due_idx` по `(next_sync_at, id)` частичный: `sync_enabled` и `next_sync_at IS NOT NULL`. По нему планировщик берёт одну просроченную строку.
 
 Запрос списка и поиска: `WHERE name ILIKE` с `ORDER BY name`, `LIMIT/OFFSET`. Отдельный btree по `name` этот шаблон не ускоряет, индекса нет.
 

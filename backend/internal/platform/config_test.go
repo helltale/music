@@ -1,6 +1,9 @@
 package platform
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
@@ -18,6 +21,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("PLAYBACK_URL_TTL", "")
 	t.Setenv("LEASE_TIMEOUT", "")
 	t.Setenv("LEASE_HEARTBEAT", "")
+	t.Setenv("SYNC_INTERVAL", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -37,6 +41,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.LeaseHeartbeat >= cfg.LeaseTimeout {
 		t.Fatal("heartbeat must be shorter than lease")
+	}
+	if cfg.SyncInterval != 24*time.Hour {
+		t.Fatalf("sync interval = %s", cfg.SyncInterval)
 	}
 	if !uuidPattern.MatchString(cfg.WorkerInstanceID) {
 		t.Fatalf("instance id %q", cfg.WorkerInstanceID)

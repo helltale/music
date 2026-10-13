@@ -1,6 +1,6 @@
 # Архитектура
 
-Статус: Phase 12 — ручная синхронизация артиста через тот же job `artist_import`. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
+Статус: Phase 13 — автоматическая синхронизация артиста тем же job `artist_import`. Этот документ — принятая архитектура MVP. Процесс разработки остаётся в [master_prompt.md](master_prompt.md).
 
 Связанные документы:
 
@@ -369,7 +369,6 @@ Worker:
 - Kubernetes manifests, Helm, service mesh;
 - HLS, DASH, adaptive bitrate, таблицу `audio_variants`;
 - рекомендации, соцфункции, DRM, мобильные клиенты;
-- автоматический sync и scheduler;
 - аутентификацию и авторизацию;
 - сбор сиротских объектов;
 - CI/CD pipeline;

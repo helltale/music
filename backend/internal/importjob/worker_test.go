@@ -49,6 +49,19 @@ func TestWorkerImportsFakeCatalog(t *testing.T) {
 	if progress["audio_ready"] != float64(3) || progress["audio_failed"] != float64(0) {
 		t.Fatalf("audio progress %s", finished.Progress)
 	}
+	var lastSynced *time.Time
+	var nextSync *time.Time
+	if err := testPool.QueryRow(ctx, `
+		SELECT a.last_synced_at, a.next_sync_at
+		FROM artists a
+		JOIN artist_external_ids e ON e.artist_id = a.id
+		WHERE e.provider = 'fake' AND e.external_id = 'test-artist'
+	`).Scan(&lastSynced, &nextSync); err != nil {
+		t.Fatal(err)
+	}
+	if lastSynced == nil || nextSync != nil {
+		t.Fatalf("last=%v next=%v", lastSynced, nextSync)
+	}
 	if countRows(t, `SELECT count(*) FROM recordings WHERE isrc = 'USTST2600001'`) != 1 {
 		t.Fatal("track one was duplicated")
 	}

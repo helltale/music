@@ -95,6 +95,103 @@ func (s *Store) SyncSubject(ctx context.Context, artistID string) (string, strin
 	return providerName, externalID, nil
 }
 
+// ArtistSync is the automatic refresh state of one artist.
+type ArtistSync struct {
+	ID           string
+	SyncEnabled  bool
+	LastSyncedAt *time.Time
+	NextSyncAt   *time.Time
+}
+
+// GetArtistSync loads the scheduler columns. A missing artist is ErrNotFound.
+func (s *Store) GetArtistSync(ctx context.Context, artistID string) (ArtistSync, error) {
+	var row ArtistSync
+	err := s.db.QueryRow(ctx, `
+		SELECT id::text, sync_enabled, last_synced_at, next_sync_at
+		FROM artists
+		WHERE id = $1
+	`, artistID).Scan(&row.ID, &row.SyncEnabled, &row.LastSyncedAt, &row.NextSyncAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ArtistSync{}, ErrNotFound
+	}
+	if err != nil {
+		return ArtistSync{}, fmt.Errorf("get artist sync: %w", err)
+	}
+	return row, nil
+}
+
+// SetSyncEnabled turns automatic refresh on or off.
+// Enabling schedules the artist immediately. Disabling clears the next time.
+func (s *Store) SetSyncEnabled(ctx context.Context, artistID string, enabled bool) (ArtistSync, error) {
+	var row ArtistSync
+	err := s.db.QueryRow(ctx, `
+		UPDATE artists
+		SET sync_enabled = $2,
+		    next_sync_at = CASE WHEN $2 THEN now() ELSE NULL END,
+		    updated_at = now()
+		WHERE id = $1
+		RETURNING id::text, sync_enabled, last_synced_at, next_sync_at
+	`, artistID, enabled).Scan(&row.ID, &row.SyncEnabled, &row.LastSyncedAt, &row.NextSyncAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ArtistSync{}, ErrNotFound
+	}
+	if err != nil {
+		return ArtistSync{}, fmt.Errorf("set artist sync: %w", err)
+	}
+	return row, nil
+}
+
+// ClaimDueSync takes one artist whose automatic refresh is due and moves the next time forward.
+// ok is false when nothing is due. interval is how far the next time moves.
+func (s *Store) ClaimDueSync(ctx context.Context, interval time.Duration) (string, bool, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `
+		UPDATE artists
+		SET next_sync_at = now() + ($1 * interval '1 millisecond'),
+		    updated_at = now()
+		WHERE id = (
+		    SELECT id
+		    FROM artists
+		    WHERE sync_enabled
+		      AND next_sync_at IS NOT NULL
+		      AND next_sync_at <= now()
+		    ORDER BY next_sync_at, id
+		    FOR UPDATE SKIP LOCKED
+		    LIMIT 1
+		)
+		RETURNING id::text
+	`, interval.Milliseconds()).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("claim due sync: %w", err)
+	}
+	return id, true, nil
+}
+
+// RecordSync stamps the artist after a finished import.
+// When automatic refresh is on, the next time is counted from this write.
+func (s *Store) RecordSync(ctx context.Context, artistID string, interval time.Duration) error {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE artists
+		SET last_synced_at = now(),
+		    next_sync_at = CASE
+		        WHEN sync_enabled THEN now() + ($2 * interval '1 millisecond')
+		        ELSE NULL
+		    END,
+		    updated_at = now()
+		WHERE id = $1
+	`, artistID, interval.Milliseconds())
+	if err != nil {
+		return fmt.Errorf("record artist sync: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListArtists returns artists ordered by name.
 // An empty query returns the whole page. A query matches a case-insensitive substring.
 func (s *Store) ListArtists(ctx context.Context, query string, limit, offset int) ([]Artist, int, error) {

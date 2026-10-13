@@ -104,6 +104,7 @@ Multi-stage сборка.
 | `API_UPSTREAM` | Для web: `http://music-api:8080` |
 | `LEASE_TIMEOUT` | `2m` |
 | `LEASE_HEARTBEAT` | `30s` |
+| `SYNC_INTERVAL` | `24h`. Как часто worker ставит sync job артисту с включённой автосинхронизацией |
 
 Один образ читает разные значения этих переменных на local, test, stage и production. Отдельный образ под среду не собирается.
 
@@ -121,7 +122,7 @@ Multi-stage сборка.
 
 ## Миграции
 
-`cmd/migrate` применяет `*.up.sql` из `backend/migrations` по имени файла и выходит с 0. Служебная таблица `schema_migrations` хранит уже применённые версии. Повторный запуск их не исполняет снова. Доменные миграции: `0001_catalog.up.sql`, `0002_import_jobs.up.sql` и `0003_audio_assets.up.sql`.
+`cmd/migrate` применяет `*.up.sql` из `backend/migrations` по имени файла и выходит с 0. Служебная таблица `schema_migrations` хранит уже применённые версии. Повторный запуск их не исполняет снова. Доменные миграции: `0001_catalog.up.sql`, `0002_import_jobs.up.sql`, `0003_audio_assets.up.sql` и `0004_artist_sync.up.sql`.
 
 Несколько API не мигрируют схему при старте. В Compose это отдельный завершившийся сервис. В Kubernetes позже это Job перед выкладкой новых Pod или шаг CI/CD. Образ тот же `music-api`, команда другая.
 

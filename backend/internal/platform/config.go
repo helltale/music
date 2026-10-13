@@ -25,6 +25,7 @@ const (
 	defaultLeaseHeartbeat            = 30 * time.Second
 	defaultMigrationsDir             = "/app/migrations"
 	defaultShutdownTimeout           = 25 * time.Second
+	defaultSyncInterval              = 24 * time.Hour
 	maxRequestBytes            int64 = 1 << 20
 )
 
@@ -56,6 +57,7 @@ type Config struct {
 	LeaseHeartbeat       time.Duration
 	MigrationsDir        string
 	ShutdownTimeout      time.Duration
+	SyncInterval         time.Duration
 }
 
 // Load reads configuration from the environment.
@@ -105,6 +107,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ShutdownTimeout, err = envDuration("SHUTDOWN_TIMEOUT", defaultShutdownTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.SyncInterval, err = envDuration("SYNC_INTERVAL", defaultSyncInterval); err != nil {
 		return Config{}, err
 	}
 	if cfg.LeaseHeartbeat >= cfg.LeaseTimeout {

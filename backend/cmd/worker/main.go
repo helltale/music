@@ -87,8 +87,9 @@ func main() {
 		WorkerID:  cfg.WorkerInstanceID,
 		Lease:     cfg.LeaseTimeout,
 		Heartbeat: cfg.LeaseHeartbeat,
-		Poll:      time.Second,
-		Log:       log,
+		Poll:         time.Second,
+		SyncInterval: cfg.SyncInterval,
+		Log:          log,
 	}
 	workerDone := make(chan struct{})
 	go func() {

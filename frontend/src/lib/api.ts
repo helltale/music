@@ -7,6 +7,13 @@ export type Artist = ArtistItem & {
   image_object_key: string | null;
 };
 
+export type ArtistSync = {
+  id: string;
+  sync_enabled: boolean;
+  last_synced_at: string | null;
+  next_sync_at: string | null;
+};
+
 export type ReleaseItem = {
   id: string;
   title: string;

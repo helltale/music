@@ -37,11 +37,12 @@ type Worker struct {
 	}
 	Catalogs  map[string]CatalogSource
 	Audio     recordingAudio
-	WorkerID  string
-	Lease     time.Duration
-	Heartbeat time.Duration
-	Poll      time.Duration
-	Log       *slog.Logger
+	WorkerID     string
+	Lease        time.Duration
+	Heartbeat    time.Duration
+	Poll         time.Duration
+	SyncInterval time.Duration
+	Log          *slog.Logger
 }
 
 // Run claims and finishes jobs until ctx is cancelled.
@@ -56,6 +57,11 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 		if _, err := w.Store.Recover(ctx, w.Lease); err != nil && ctx.Err() == nil {
 			w.log().Error("recover jobs", "error", err.Error())
+		}
+		if w.SyncInterval > 0 {
+			if err := w.schedule(ctx); err != nil && ctx.Err() == nil {
+				w.log().Error("schedule sync", "error", err.Error())
+			}
 		}
 		job, ok, err := w.Store.Claim(ctx, w.WorkerID)
 		if err != nil {
@@ -110,13 +116,21 @@ func (w *Worker) process(ctx context.Context, job Job) {
 			if !errors.Is(finishErr, ErrLeaseLost) {
 				w.log().Error("complete job", "job_id", job.ID, "error", finishErr.Error())
 			}
+		} else {
+			w.noteSync(ctx, job)
 		}
 		return
 	}
 	message := jobMessage(err)
 	w.log().Error("import job", "job_id", job.ID, "error", err.Error(), "permanent", permanent(err))
 	if permanent(err) {
-		_ = w.Store.Finish(ctx, job.ID, w.WorkerID, job.Attempt, StatusFailed, message, job.Progress)
+		if finishErr := w.Store.Finish(ctx, job.ID, w.WorkerID, job.Attempt, StatusFailed, message, job.Progress); finishErr != nil {
+			if !errors.Is(finishErr, ErrLeaseLost) {
+				w.log().Error("fail job", "job_id", job.ID, "error", finishErr.Error())
+			}
+		} else {
+			w.noteSync(ctx, job)
+		}
 		return
 	}
 	if _, requeueErr := w.Store.Requeue(ctx, job.ID, w.WorkerID, job.Attempt, message); requeueErr != nil && !errors.Is(requeueErr, ErrLeaseLost) {
